@@ -1,0 +1,14 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+data/*.db
+data/*.db-journal
+*.log
+.DS_Store
+.idea/
+.vscode/
