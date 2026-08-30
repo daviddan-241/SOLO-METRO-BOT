@@ -120,8 +120,32 @@ def init_db() -> None:
                 code TEXT PRIMARY KEY,
                 owner_id INTEGER
             );
+
+            CREATE TABLE IF NOT EXISTS signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                source TEXT,
+                chain TEXT,
+                enabled INTEGER DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                chain TEXT,
+                token TEXT,
+                side TEXT,
+                amount TEXT,
+                txid TEXT,
+                created_at REAL
+            );
             """
         )
+        cols = {r[1] for r in con.execute("PRAGMA table_info(monitors)").fetchall()}
+        if "qty" not in cols:
+            con.execute("ALTER TABLE monitors ADD COLUMN qty TEXT")
+        if "cost" not in cols:
+            con.execute("ALTER TABLE monitors ADD COLUMN cost TEXT")
 
 
 def ensure_user(user_id: int, username: str | None, first_name: str | None) -> dict:
@@ -477,6 +501,41 @@ def clear_monitors(user_id: int) -> int:
 def delete_monitor(item_id: int) -> None:
     with connect() as con:
         con.execute("DELETE FROM monitors WHERE id=?", (item_id,))
+
+
+def list_copytrade_all() -> list[dict]:
+    with connect() as con:
+        rows = con.execute("SELECT * FROM copytrade").fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_order_status(item_id: int, status: str) -> None:
+    with connect() as con:
+        con.execute("UPDATE orders SET status=? WHERE id=?", (status, item_id))
+
+
+def add_signal(user_id: int, source: str, chain: str = "ETH") -> dict:
+    with connect() as con:
+        cur = con.execute(
+            "INSERT INTO signals (user_id, source, chain, enabled) VALUES (?,?,?,1)",
+            (user_id, source, chain),
+        )
+        row = con.execute("SELECT * FROM signals WHERE id=?", (cur.lastrowid,)).fetchone()
+        return dict(row)
+
+
+def list_signals(user_id: int) -> list[dict]:
+    with connect() as con:
+        rows = con.execute("SELECT * FROM signals WHERE user_id=? ORDER BY id", (user_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def log_trade(user_id: int, chain: str, token: str, side: str, amount: str, txid: str) -> None:
+    with connect() as con:
+        con.execute(
+            "INSERT INTO trades (user_id, chain, token, side, amount, txid, created_at) VALUES (?,?,?,?,?,?,?)",
+            (user_id, chain, token, side, amount, txid, time.time()),
+        )
 
 
 def referral_count(user_id: int) -> int:

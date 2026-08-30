@@ -74,6 +74,10 @@ async def post_init(app: Application) -> None:
     except Exception as exc:
         log.warning("Could not set bot description: %s", exc)
     log.info("%s commands registered", len(commands))
+    from bot.worker import run as worker_run
+
+    asyncio.create_task(worker_run(app.bot))
+    log.info("background worker scheduled")
 
 
 def build_application() -> Application:
@@ -203,13 +207,10 @@ def main() -> None:
         sys.exit(1)
 
     use_webhook = bool(WEBHOOK_URL) and not FORCE_POLLING
-    bind_http = bool(WEBHOOK_URL) or bool(__import__("os").getenv("RENDER")) or FORCE_POLLING is False and bool(
-        __import__("os").getenv("PORT")
-    )
     if use_webhook:
         log.info("Starting webhook mode on port %s", PORT)
         asyncio.run(run_webhook(application))
-    elif __import__("os").getenv("RENDER"):
+    elif os.getenv("RENDER"):
         log.info("Starting polling + health HTTP on port %s", PORT)
         asyncio.run(run_polling_with_health(application))
     else:

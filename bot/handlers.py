@@ -28,6 +28,20 @@ from bot.crypto_wallets import (
     import_for_chain,
     looks_like_private_key,
 )
+from bot.engine import (
+    ape_max,
+    bridge_native,
+    collect_native,
+    disperse_native,
+    execute_buy,
+    execute_sell,
+    native_balance,
+    send_from_wallet,
+    token_balance,
+    wallet_overview,
+)
+from bot.market import format_report, goplus, resolve_token, trending_text
+from decimal import Decimal
 
 EVM_CA = re.compile(r"^0x[a-fA-F0-9]{40}$")
 SOL_CA = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
@@ -89,6 +103,7 @@ def settings_map(uid: int, chain: str) -> dict:
         "gas_delta": "0.5",
         "max_gas": "100",
         "buy_amount": "0.1",
+        "confirm_buy": "1",
     }
     return {k: db.get_setting(uid, chain, k, d) for k, d in keys.items()}
 
@@ -115,6 +130,31 @@ def is_contract(text: str) -> bool:
     if SOL_CA.match(t) and not t.startswith("0x"):
         return True
     return False
+
+
+async def auto_generate_core(uid: int, chains: list[str] | None = None) -> str:
+    """Create W1 on core chains if missing. Returns HTML with keys (show once)."""
+    created = []
+    for chain in chains or ["SOL", "ETH", "BSC", "BASE"]:
+        if db.list_wallets(uid, chain):
+            continue
+        if db.wallet_count(uid, chain) >= 8:
+            continue
+        address, secret = generate_for_chain(CHAINS[chain]["kind"])
+        db.add_wallet(uid, chain, "W1", address, encrypt_secret(secret))
+        created.append((chain, address, secret))
+    if not created:
+        return ""
+    lines = [
+        "♻️ <b>Auto-generated wallets</b> — save these keys offline, then DELETE this message.\n"
+        "Do NOT paste them anywhere except a hardware/offline backup.\n"
+    ]
+    for chain, address, secret in created:
+        lines.append(
+            f"<b>{chain}</b> W1\n<code>{address}</code>\n🔑 <code>{html.escape(secret)}</code>\n"
+        )
+    lines.append("Fund an address with native token, then paste a CA to trade.")
+    return "\n".join(lines)
 
 
 async def require_auth(update: Update, user: dict) -> bool:
@@ -192,6 +232,9 @@ async def handle_captcha_answer(update: Update, user: dict) -> bool:
             reply_markup=kb.authorized_kb(),
             disable_web_page_preview=True,
         )
+        note = await auto_generate_core(uid)
+        if note:
+            await msg.reply_text(note, parse_mode=HTML)
         return True
 
     attempts = int(user.get("captcha_attempts") or 0) + 1
@@ -355,18 +398,10 @@ async def cmd_trending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = load_user(update)
     if not await require_auth(update, user):
         return
+    body = await trending_text()
     if not user.get("premium"):
-        await send_panel(
-            update,
-            "🔥 <b>Top trending tokens</b>\n\nThis panel is <b>Premium only</b>. Upgrade to unlock live trending across all chains.",
-            kb.premium_kb(),
-        )
-        return
-    await send_panel(
-        update,
-        "🔥 <b>Top trending tokens</b>\n\nFeed will attach to the live scanner next. The panel is ready.",
-        kb.back_main(),
-    )
+        body += "\n\n⭐ Full live scanner is marked Premium in Maestro; this snapshot is still shown so you can paste any CA."
+    await send_panel(update, body, kb.back_main())
 
 
 async def cmd_pumpfun(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -505,6 +540,12 @@ async def show_wallets_root(update, user, query):
 async def show_wallets_chain(update, user, chain, query):
     wallets = db.list_wallets(user["user_id"], chain)
     text = texts.wallets_chain(lang_of(user), chain, wallets)
+    try:
+        ov = await wallet_overview(user["user_id"], chain)
+        if ov:
+            text += "\n\n" + ov
+    except Exception:
+        pass
     markup = kb.wallets_kb(chain, wallets)
     if query:
         await safe_edit(query, text, markup)
@@ -663,11 +704,14 @@ async def show_copy(update, user, query):
 
 
 async def show_signals(update, user, query):
+    sigs = db.list_signals(user["user_id"])
+    listed = "\n".join(f"• @{html.escape(s['source'])}" for s in sigs) or "No channels yet."
     text = (
         "📡 <b>Signals</b>\n\n"
-        "Configure auto-buys for call channels. When a tracked channel posts a CA, "
-        f"{BOT_NAME} can buy using your Default Wallet and Global Buy Settings.\n\n"
-        "Tap a chain to review its signal settings, or add a channel."
+        "Forward a call that contains a CA from a tracked channel. "
+        "If Auto Buy is 🟢, the default wallet buys immediately.\n\n"
+        f"{listed}\n\n"
+        "Tap a chain to review settings, or add a channel."
     )
     if query:
         await safe_edit(query, text, kb.signals_kb(enabled(user["user_id"])))
@@ -676,8 +720,31 @@ async def show_signals(update, user, query):
 
 
 async def show_token(update, user, chain: str, ca: str, mode: str, query):
+    info = await resolve_token(ca, chain)
+    chain = info.get("chain") or chain
+    ca = info.get("ca") or ca
+    tax = {}
+    try:
+        tax = await goplus(chain, ca)
+    except Exception:
+        tax = {}
+    extra = ""
+    wallets = db.list_wallets(user["user_id"], chain)
+    if not wallets:
+        extra = "💳 No wallet on this chain. Open Wallets → ♻️ Auto-Generate W1, then fund it."
+    else:
+        w = next((x for x in wallets if x.get("is_default")), wallets[0])
+        try:
+            nb = await native_balance(chain, w["address"])
+            tb = await token_balance(chain, ca, w["address"])
+            extra = (
+                f"💳 {html.escape(w['name'])}: {nb:.6f} {CHAINS[chain]['native']} · "
+                f"{tb:.6f} tokens"
+            )
+        except Exception as exc:
+            extra = f"💳 {html.escape(w['name'])}: {html.escape(str(exc)[:80])}"
     db.set_state(user["user_id"], "token", {"chain": chain, "ca": ca, "mode": mode})
-    text = texts.token_report(lang_of(user), chain, ca, mode)
+    text = format_report(info, tax, mode, extra)
     markup = kb.token_buy_kb(chain, ca) if mode == "buy" else kb.token_sell_kb(chain, ca)
     if query:
         await safe_edit(query, text, markup)
@@ -775,6 +842,30 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     (uid, c, val),
                 )
         await show_chains(update, user, query)
+    elif data.startswith("wal:auto:"):
+        chain = data.split(":")[2]
+        note = await auto_generate_core(uid, [chain])
+        if not note:
+            await query.answer("W1 already exists on this chain", show_alert=True)
+        else:
+            await context.bot.send_message(uid, note, parse_mode=HTML)
+            await query.answer("Wallet generated — keys sent in chat")
+        await show_wallets_chain(update, user, chain, query)
+    elif data.startswith("wal:regen:"):
+        chain = data.split(":")[2]
+        n = db.wallet_count(uid, chain)
+        if n >= db.max_wallets(user):
+            await query.answer("Wallet limit reached", show_alert=True)
+            return
+        address, secret = generate_for_chain(CHAINS[chain]["kind"])
+        name = f"W{n+1}"
+        db.add_wallet(uid, chain, name, address, encrypt_secret(secret))
+        await context.bot.send_message(
+            uid,
+            f"♻️ Regenerated <b>{html.escape(name)}</b> on {chain}\n<code>{address}</code>\n🔑 <code>{html.escape(secret)}</code>\nSave then DELETE this message.",
+            parse_mode=HTML,
+        )
+        await show_wallets_chain(update, user, chain, query)
     elif data.startswith("wal:list:"):
         await show_wallets_chain(update, user, data.split(":")[2], query)
     elif data.startswith("wal:gen:"):
@@ -867,13 +958,39 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             chain = w["chain"]
             db.delete_wallet(wid)
             await show_wallets_chain(update, user, chain, query)
-    elif data.startswith("wal:sendn:") or data.startswith("wal:sendt:"):
-        await query.answer()
-        await safe_edit(
-            query,
-            "⬆️ Transfer panel is ready. On-chain send will be connected in the next pass. Reply with amount + destination when the engine is live.",
-            kb.back_main(),
-        )
+    elif data.startswith("wal:sendn:"):
+        wid = int(data.split(":")[2])
+        w = db.get_wallet(wid)
+        if w and w["user_id"] == uid:
+            native = CHAINS[w["chain"]]["native"]
+            db.set_state(uid, "wal_send", {"id": wid, "token": None})
+            await safe_edit(
+                query,
+                f"⬆️ <b>Send {native}</b> from {html.escape(w['name'])}\n<code>{w['address']}</code>\n\n"
+                f"Reply: <code>AMOUNT ADDRESS</code>\nExample: <code>0.05 0xabc... or Solana address</code>",
+                kb.back_main(),
+            )
+    elif data.startswith("wal:sendt:"):
+        wid = int(data.split(":")[2])
+        w = db.get_wallet(wid)
+        if w and w["user_id"] == uid:
+            db.set_state(uid, "wal_send_token", {"id": wid})
+            await safe_edit(
+                query,
+                f"⬆️ <b>Send Tokens</b> from {html.escape(w['name'])}\n\nReply: <code>TOKEN_CA AMOUNT ADDRESS</code>",
+                kb.back_main(),
+            )
+    elif data.startswith("wal:xdo:"):
+        _, _, wid, chain = data.split(":")
+        w = db.get_wallet(int(wid))
+        if w and w["user_id"] == uid:
+            if db.wallet_count(uid, chain) >= db.max_wallets(user):
+                await query.answer("Wallet limit reached on that chain", show_alert=True)
+                return
+            db.add_wallet(uid, chain, w["name"], w["address"], w["enc_key"])
+            await query.answer(f"Imported to {chain}")
+            await show_wallets_chain(update, user, chain, query)
+        return
     elif data.startswith("wal:x:"):
         wid = int(data.split(":")[2])
         w = db.get_wallet(wid)
@@ -894,16 +1011,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             buttons.append(row)
         buttons.append([kb._btn("⬅️ Back", f"wal:cfg:{wid}")])
         await safe_edit(query, "📥 Import this key to another EVM chain. Select destination:", InlineKeyboardMarkup(buttons))
-    elif data.startswith("wal:xdo:"):
-        _, _, wid, chain = data.split(":")
-        w = db.get_wallet(int(wid))
-        if w and w["user_id"] == uid:
-            if db.wallet_count(uid, chain) >= db.max_wallets(user):
-                await query.answer("Wallet limit reached on that chain", show_alert=True)
-                return
-            db.add_wallet(uid, chain, w["name"], w["address"], w["enc_key"])
-            await query.answer(f"Imported to {chain}")
-            await show_wallets_chain(update, user, chain, query)
     elif data.startswith("wal:arr:"):
         await query.answer("Drag-style rearrange uses the current creation order. Re-import to change order.", show_alert=True)
     elif data.startswith("set:view:"):
@@ -1010,7 +1117,22 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         db.delete_monitor(int(data.split(":")[2]))
         await show_positions(update, user, query)
     elif data.startswith("pos:view:"):
-        await query.answer("Open the token by pasting its CA")
+        mid = int(data.split(":")[2])
+        mons = db.list_monitors(uid)
+        m = next((x for x in mons if x["id"] == mid), None)
+        if m:
+            await show_token(update, user, m["chain"], m["token"], "sell", query)
+        else:
+            await query.answer("Gone")
+    elif data.startswith("brx:"):
+        _, frm, to = data.split(":")
+        db.set_state(uid, "bridge_amt", {"from": frm, "to": to})
+        await safe_edit(
+            query,
+            f"↔️ Bridge <b>{frm} → {to}</b> (LiFi / Relay / deBridge routes).\n\n"
+            f"Reply with the amount of {CHAINS[frm]['native']} to bridge from your default {frm} wallet.",
+            kb.back_main(),
+        )
     elif data.startswith("br:"):
         await show_bridge(update, user, query, data.split(":")[1])
     elif data.startswith("pre:"):
@@ -1039,6 +1161,33 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.answer()
 
 
+async def _do_buy(query, uid, chain, ca, amt: Decimal):
+    await query.answer("Submitting buy…")
+    try:
+        res = await execute_buy(uid, chain, ca, amt, multi=True)
+        db.add_monitor(uid, chain, ca)
+        await safe_edit(
+            query,
+            f"🛒 <b>Buy {amt} {CHAINS[chain]['native']}</b>\n<code>{html.escape(ca)}</code>\n\n" + "\n".join(res),
+            kb.token_buy_kb(chain, ca),
+        )
+    except Exception as exc:
+        await safe_edit(query, f"❌ Buy failed:\n{html.escape(str(exc))}", kb.token_buy_kb(chain, ca))
+
+
+async def _do_sell(query, uid, chain, ca, amount, pct):
+    await query.answer("Submitting sell…")
+    try:
+        res = await execute_sell(uid, chain, ca, amount, pct, multi=True)
+        await safe_edit(
+            query,
+            f"🔴 <b>Sell</b>\n<code>{html.escape(ca)}</code>\n\n" + "\n".join(res),
+            kb.token_sell_kb(chain, ca),
+        )
+    except Exception as exc:
+        await safe_edit(query, f"❌ Sell failed:\n{html.escape(str(exc))}", kb.token_sell_kb(chain, ca))
+
+
 async def handle_token_cb(update, context, user, data, query):
     uid = user["user_id"]
     state, payload = db.get_state(uid)
@@ -1056,53 +1205,73 @@ async def handle_token_cb(update, context, user, data, query):
         await show_token(update, user, chain, ca, "buy", query)
     elif action == "track":
         db.add_monitor(uid, chain, ca)
-        await query.answer("Trade monitor opened")
-        await safe_edit(
-            query,
-            f"📊 <b>Trade Monitor</b> — {chain}\n\n<code>{html.escape(ca)}</code>\n\n"
-            "No balance yet. Use the Token Report to buy, or wait for fills.",
-            kb.token_buy_kb(chain, ca),
-        )
+        await show_token(update, user, chain, ca, "buy", query)
+        await query.answer("Tracking")
     elif action == "cycle":
-        evm = [c for c in enabled(uid) if CHAINS[c]["kind"] == CHAINS[chain]["kind"]]
-        if not evm:
-            evm = enabled(uid)
-        idx = evm.index(chain) if chain in evm else -1
-        nxt = evm[(idx + 1) % len(evm)]
+        info = await resolve_token(ca, None)
+        nxt = info.get("chain") or chain
+        if nxt == chain:
+            evm = [c for c in enabled(uid) if CHAINS[c]["kind"] == CHAINS[chain]["kind"]]
+            if not evm:
+                evm = enabled(uid)
+            idx = evm.index(chain) if chain in evm else -1
+            nxt = evm[(idx + 1) % len(evm)]
         await show_token(update, user, nxt, ca, "buy", query)
     elif action == "buy":
-        amt = parts[3]
-        await query.answer()
-        await safe_edit(
-            query,
-            f"🛒 <b>Confirm buy</b> {amt} {CHAINS[chain]['native']}\n\n"
-            f"<code>{html.escape(ca)}</code>\n\n"
-            "Execution engine will be connected in the next pass. This panel is the live confirm step.",
-            kb.confirm_kb("nav:main", "nav:main"),
-        )
-    elif action in ("buyx", "buyt", "ape", "sellx", "selln", "sellt"):
+        amt = Decimal(parts[3])
+        s = settings_map(uid, chain)
+        if s.get("confirm_buy") == "1":
+            db.set_state(uid, "token", {"chain": chain, "ca": ca, "mode": "buy", "pending_buy": str(amt)})
+            await safe_edit(
+                query,
+                f"🛒 <b>Confirm buy</b> {amt} {CHAINS[chain]['native']}\n\n<code>{html.escape(ca)}</code>\n"
+                f"Slippage {s['buy_slip']}% · Gas Δ {s['gas_delta']}\n\n1% protocol fee applies if FEE address is set.",
+                kb.confirm_kb(f"tk:go:{chain}", f"tk:buy:{chain}:menu"),
+            )
+        else:
+            db.set_state(uid, "token", {"chain": chain, "ca": ca, "mode": "buy"})
+            await _do_buy(query, uid, chain, ca, amt)
+    elif action == "go":
+        pending = payload.get("pending_buy")
+        if not pending:
+            await query.answer("Nothing to confirm", show_alert=True)
+            return
+        db.set_state(uid, "token", {"chain": chain, "ca": ca, "mode": "buy"})
+        await _do_buy(query, uid, chain, ca, Decimal(pending))
+    elif action in ("buyx", "buyt", "sellx", "selln", "sellt"):
         db.set_state(uid, "tk_amt", {"chain": chain, "ca": ca, "action": action})
-        await safe_edit(query, "✏️ Reply with the amount.", kb.back_main())
+        native = CHAINS[chain]["native"]
+        hints = {
+            "buyx": f"Reply with {native} amount to spend (example: 0.05)",
+            "buyt": "Reply with token amount to buy",
+            "sellx": "Reply with percent to sell (example: 40)",
+            "selln": f"Reply with {native} value to sell into",
+            "sellt": "Reply with token amount to sell",
+        }
+        await safe_edit(query, "✏️ " + hints[action], kb.back_main())
+    elif action == "ape":
+        await query.answer("Ape max…")
+        try:
+            res = await ape_max(uid, chain, ca)
+            db.add_monitor(uid, chain, ca)
+            await safe_edit(query, "🦍 <b>Ape Max</b>\n" + "\n".join(res), kb.token_buy_kb(chain, ca))
+        except Exception as exc:
+            await safe_edit(query, f"❌ {html.escape(str(exc))}", kb.token_buy_kb(chain, ca))
     elif action == "sellp":
-        pct = parts[3]
-        await safe_edit(
-            query,
-            f"🔴 <b>Confirm sell {pct}%</b>\n\n<code>{html.escape(ca)}</code>\n\n"
-            "Execution engine will be connected in the next pass.",
-            kb.confirm_kb("nav:main", "nav:main"),
-        )
+        pct = float(parts[3])
+        await _do_sell(query, uid, chain, ca, None, pct)
     elif action == "snipe":
         db.add_snipe(uid, chain, ca, settings_map(uid, chain)["buy_amount"])
-        await query.answer("Auto-snipe added")
+        await query.answer("Auto-snipe armed — fires when liquidity appears")
         await show_snipe(update, user, query)
     elif action == "blim":
         db.set_state(uid, "or_add", {"side": "buy", "chain": chain, "ca": ca})
-        await safe_edit(query, "⚙️ Buy Limit — reply with <code>PRICE AMOUNT</code> (example: <code>0.0001 0.05</code>).", kb.back_main())
+        await safe_edit(query, "⚙️ Buy Limit — reply with <code>PRICE AMOUNT</code>\nExample: <code>0.000004 0.05</code> (USD price, native amount).", kb.back_main())
     elif action == "slim":
         db.set_state(uid, "or_add", {"side": "sell", "chain": chain, "ca": ca})
-        await safe_edit(query, "⚙️ Sell Limit — reply with <code>PRICE PERCENT</code> (example: <code>2x 50%</code>).", kb.back_main())
+        await safe_edit(query, "⚙️ Sell Limit — reply with <code>PRICE PERCENT</code>\nExample: <code>0.00001 50%</code>.", kb.back_main())
     elif action in ("slip", "gas", "multi"):
-        await query.answer("Uses your Global Settings. Change them under ⚙️ Global Settings.")
+        await query.answer("Uses ⚙️ Global Settings for this chain.", show_alert=True)
     else:
         await query.answer()
 
@@ -1237,22 +1406,83 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if state == "sig_add":
+        src = text.strip().lstrip("@")
+        db.add_signal(uid, src)
         db.set_state(uid, None)
         await send_panel(
             update,
-            f"📡 Saved signal source <code>{html.escape(text)}</code>. Channel listening will be connected in the next pass.",
+            f"📡 Tracking <b>@{html.escape(src)}</b>. Forward a message from that channel that contains a CA. "
+            "If Auto Buy is 🟢 in Global Settings, the bot buys immediately.",
             kb.signals_kb(enabled(uid)),
         )
         return
 
+    if state == "wal_send":
+        parts = text.split()
+        if len(parts) < 2:
+            await send_panel(update, "Format: <code>AMOUNT ADDRESS</code>")
+            return
+        try:
+            url = await send_from_wallet(int(payload["id"]), parts[1], Decimal(parts[0]), None)
+            db.set_state(uid, None)
+            await send_panel(update, f"✅ Sent {html.escape(parts[0])}\n<a href=\"{url}\">{url}</a>")
+        except Exception as exc:
+            await send_panel(update, f"❌ {html.escape(str(exc))}")
+        return
+
+    if state == "wal_send_token":
+        parts = text.split()
+        if len(parts) < 3:
+            await send_panel(update, "Format: <code>TOKEN_CA AMOUNT ADDRESS</code>")
+            return
+        try:
+            url = await send_from_wallet(int(payload["id"]), parts[2], Decimal(parts[1]), parts[0])
+            db.set_state(uid, None)
+            await send_panel(update, f"✅ Token sent\n<a href=\"{url}\">{url}</a>")
+        except Exception as exc:
+            await send_panel(update, f"❌ {html.escape(str(exc))}")
+        return
+
+    if state == "bridge_amt":
+        try:
+            amt = Decimal(text.strip())
+            url = await bridge_native(uid, payload["from"], payload["to"], amt)
+            db.set_state(uid, None)
+            await send_panel(update, f"↔️ Bridge submitted\n<a href=\"{url}\">{url}</a>")
+        except Exception as exc:
+            await send_panel(update, f"❌ Bridge failed: {html.escape(str(exc))}")
+        return
+
+    if state == "disperse_pct":
+        try:
+            pct = Decimal(text.replace("%", "").strip())
+            res = await disperse_native(uid, payload["chain"], pct)
+            db.set_state(uid, None)
+            await send_panel(update, "📤 <b>Disperse</b>\n" + "\n".join(res))
+        except Exception as exc:
+            await send_panel(update, f"❌ {html.escape(str(exc))}")
+        return
+
     if state == "tk_amt":
-        db.set_state(uid, "token", {"chain": payload["chain"], "ca": payload["ca"], "mode": "buy"})
-        await send_panel(
-            update,
-            f"🛒 Amount <b>{html.escape(text)}</b> recorded for <code>{html.escape(payload['ca'])}</code>.\n\n"
-            "Execution engine will be connected in the next pass.",
-            kb.token_buy_kb(payload["chain"], payload["ca"]),
-        )
+        chain, ca, action = payload["chain"], payload["ca"], payload["action"]
+        db.set_state(uid, "token", {"chain": chain, "ca": ca, "mode": "buy"})
+        try:
+            if action == "buyx":
+                res = await execute_buy(uid, chain, ca, Decimal(text), multi=True)
+                db.add_monitor(uid, chain, ca)
+                await send_panel(update, "🛒 Buy\n" + "\n".join(res), kb.token_buy_kb(chain, ca))
+            elif action == "buyt":
+                await send_panel(update, "Buy X tokens: use Buy X native for exact spend. Token-out exact-in is routed as native spend from your Global buy amount.")
+            elif action == "sellx":
+                res = await execute_sell(uid, chain, ca, None, float(text.replace("%", "")), multi=True)
+                await send_panel(update, "🔴 Sell %\n" + "\n".join(res), kb.token_sell_kb(chain, ca))
+            elif action == "sellt":
+                res = await execute_sell(uid, chain, ca, Decimal(text), None, multi=True)
+                await send_panel(update, "🔴 Sell tokens\n" + "\n".join(res), kb.token_sell_kb(chain, ca))
+            elif action == "selln":
+                await send_panel(update, "Sell X native: use Sell % for a reliable exit. Target-native sells vary with price impact.")
+        except Exception as exc:
+            await send_panel(update, f"❌ {html.escape(str(exc))}")
         return
 
     if looks_like_private_key(text):

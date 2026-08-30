@@ -110,6 +110,7 @@ def wallets_kb(chain: str, wallets: list) -> InlineKeyboardMarkup:
             _btn("📥 Import Wallet", f"wal:imp:{chain}"),
         ]
     )
+    rows.append([_btn("♻️ Auto-Generate W1", f"wal:auto:{chain}")])
     if wallets:
         rows.append([_btn("💳 Default Wallet", f"wal:def:{chain}")])
         rows.append([_btn("🗄 Rearrange Wallets", f"wal:arr:{chain}")])
@@ -123,6 +124,7 @@ def wallet_config_kb(w: dict) -> InlineKeyboardMarkup:
         [_btn(f"⬆️ Send {native}", f"wal:sendn:{w['id']}"), _btn("⬆️ Send Tokens", f"wal:sendt:{w['id']}")],
         [_btn("📋 Copy Address", f"wal:addr:{w['id']}"), _btn("🔑 Export Key", f"wal:exp:{w['id']}")],
         [_btn("✏️ Rename", f"wal:ren:{w['id']}"), _btn("📥 Import Cross-Chain", f"wal:x:{w['id']}")],
+        [_btn("♻️ Regenerate New Wallet", f"wal:regen:{w['chain']}")],
         [_btn("🗑 Disconnect", f"wal:del:{w['id']}")],
         [_btn("⬅️ Wallets", f"wal:list:{w['chain']}"), _btn("⬅️ Main Menu", "nav:main")],
     ]
@@ -157,6 +159,7 @@ def settings_kb(chain: str) -> InlineKeyboardMarkup:
         [_btn("🟢/🔴 Anti-MEV", f"set:tog:{chain}:anti_mev"), _btn("🟢/🔴 Degen Mode", f"set:tog:{chain}:degen")],
         [_btn("🟢/🔴 Anti-Rug", f"set:tog:{chain}:anti_rug"), _btn("🟢/🔴 Smart Slippage", f"set:tog:{chain}:smart_slip")],
         [_btn("🟢/🔴 Auto Buy", f"set:tog:{chain}:auto_buy"), _btn("🟢/🔴 Auto-Approve", f"set:tog:{chain}:auto_approve")],
+        [_btn("🟢/🔴 Confirm Manual Buy", f"set:tog:{chain}:confirm_buy")],
         [_btn("💧 Buy Slippage", f"set:ask:{chain}:buy_slip"), _btn("💧 Sell Slippage", f"set:ask:{chain}:sell_slip")],
         [_btn("⛽ Gas Delta", f"set:ask:{chain}:gas_delta"), _btn("⛽ Max Gas", f"set:ask:{chain}:max_gas")],
         [_btn("💰 Buy Amount", f"set:ask:{chain}:buy_amount")],
