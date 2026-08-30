@@ -2,7 +2,19 @@
 
 Telegram trading bot UI matching the Maestro-style flow: captcha gate, command menu, chains, wallets, settings, copytrade, autosnipe, bridge, premium, cashback, referral, and Token Report on pasted CAs.
 
-This pass ships the **full live face** — every command and button from the screenshots opens the matching panel. Wallet generate/import is real (keys encrypted at rest). On-chain buy/sell/bridge execution is stubbed for the next pass.
+Live trading engine is wired:
+
+- DexScreener token reports (price, MC, liquidity, chart) + GoPlus tax/honeypot flags
+- Real wallet generate / import / auto-generate W1 (SOL, ETH, BSC, BASE)
+- Live native balances
+- EVM buys/sells via LiFi aggregator with Uniswap V2 / PancakeSwap fallback
+- Solana buys/sells via Jupiter
+- Send native / ERC-20, collect, disperse
+- EVM→EVM bridge via LiFi (Relay/deBridge routes)
+- Limit orders, autosnipe, copytrade worker (polls every ~8s)
+- Signal auto-buy when you forward a CA from a tracked channel
+
+Fund a generated wallet with native gas+size, paste a CA, tap Buy.
 
 ## Render (free web)
 
