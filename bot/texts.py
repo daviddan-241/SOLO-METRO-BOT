@@ -7,6 +7,7 @@ from bot.config import (
     TWITTER_URL,
     SUPPORT_URL,
     TOS_URL,
+    MORE_LINKS_URL,
     FEE_PERCENT,
     CHAINS,
 )
@@ -71,14 +72,20 @@ def main_menu(lang: str) -> str:
         "⚙️ <b>Global Settings:</b> Customize the bot.\n"
         "🕓 <b>Active Orders:</b> Active buy/sell limit orders.\n"
         "📈 <b>Positions:</b> Monitor your active trades.\n\n"
-        "⚡ <b>Paste a token CA to trade immediately!</b>",
+        "⚡ <b>Paste a token CA to trade immediately!</b>\n\n"
+        f"<a href=\"{HUB_URL}\">Hub</a> • <a href=\"{UPDATES_URL}\">Updates</a> • "
+        f"<a href=\"{TWITTER_URL}\">X (Twitter)</a> • <a href=\"{DOCS_URL}\">Docs</a> • "
+        f"<a href=\"{SUPPORT_URL}\">Support</a> • <a href=\"{MORE_LINKS_URL}\">More Links</a>",
         f"⭐ 欢迎使用 {BOT_NAME}，<b>一站式</b>交易解决方案！\n\n"
         "🔗 <b>链:</b> 启用/禁用链。\n"
         "💳 <b>钱包:</b> 导入或生成钱包。\n"
         "⚙️ <b>全局设置:</b> 自定义机器人。\n"
         "🕓 <b>活跃订单:</b> 买入/卖出限价单。\n"
         "📈 <b>持仓:</b> 监控进行中的交易。\n\n"
-        "⚡ <b>粘贴代币合约地址即可立即交易！</b>",
+        "⚡ <b>粘贴代币合约地址即可立即交易！</b>\n\n"
+        f"<a href=\"{HUB_URL}\">Hub</a> • <a href=\"{UPDATES_URL}\">Updates</a> • "
+        f"<a href=\"{TWITTER_URL}\">X (Twitter)</a> • <a href=\"{DOCS_URL}\">Docs</a> • "
+        f"<a href=\"{SUPPORT_URL}\">Support</a> • <a href=\"{MORE_LINKS_URL}\">More Links</a>",
     )
 
 

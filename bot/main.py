@@ -4,11 +4,12 @@ import os
 import sys
 
 from aiohttp import web
-from telegram import BotCommand, Update
+from telegram import BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeDefault, Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
     CommandHandler,
+    ContextTypes,
     MessageHandler,
     filters,
 )
@@ -65,7 +66,11 @@ log = logging.getLogger("solo-metro")
 
 async def post_init(app: Application) -> None:
     commands = [BotCommand(name, desc) for name, desc in BOT_COMMANDS]
-    await app.bot.set_my_commands(commands)
+    await app.bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    try:
+        await app.bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
+    except Exception as exc:
+        log.warning("Could not set private-chat commands: %s", exc)
     try:
         await app.bot.set_my_description(texts.bot_description()[:512])
         await app.bot.set_my_short_description(
@@ -120,7 +125,29 @@ def build_application() -> Application:
     application.add_handler(MessageHandler(filters.Regex(r"^/quick_"), cmd_quick))
     application.add_handler(CallbackQueryHandler(on_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    application.add_error_handler(on_error)
     return application
+
+
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    if not msg:
+        return
+    await msg.reply_text(
+        "Unknown command. Send /help for the full list, or /start for the main menu."
+    )
+
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log.exception("unhandled error: %s", context.error)
+    try:
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text(
+                "Something went wrong. Send /start to reopen the menu, or /support."
+            )
+    except Exception:
+        pass
 
 
 async def run_webhook(application: Application) -> None:

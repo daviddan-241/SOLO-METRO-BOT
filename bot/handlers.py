@@ -1,4 +1,5 @@
 import html
+import logging
 import re
 import time
 from telegram import InlineKeyboardMarkup, InputFile, Message, Update
@@ -46,6 +47,14 @@ from decimal import Decimal
 EVM_CA = re.compile(r"^0x[a-fA-F0-9]{40}$")
 SOL_CA = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
 HTML = ParseMode.HTML
+log = logging.getLogger("solo-metro.handlers")
+
+
+async def safe_answer(query, *args, **kwargs) -> None:
+    try:
+        await query.answer(*args, **kwargs)
+    except Exception:
+        pass
 
 
 def lang_of(user: dict) -> str:
@@ -67,7 +76,7 @@ async def safe_edit(query, text: str, markup=None) -> None:
         )
     except BadRequest as exc:
         if "not modified" in str(exc).lower():
-            await query.answer()
+            await safe_answer(query)
         elif "there is no text" in str(exc).lower() or "message can't be edited" in str(exc).lower():
             await query.message.reply_text(
                 text, parse_mode=HTML, reply_markup=markup, disable_web_page_preview=True
@@ -617,10 +626,11 @@ async def show_bridge(update, user, query, route: str = "relay"):
         "arc": "🟦 <b>Bridge assets to USDC on Arc</b>\n\nConvert and land as USDC on Arc. Paste the source asset to begin.",
     }
     text = titles.get(route, titles["relay"])
+    markup = kb.bridge_kb(enabled(user["user_id"]))
     if query:
-        await safe_edit(query, text, kb.bridge_kb())
+        await safe_edit(query, text, markup)
     else:
-        await send_panel(update, text, kb.bridge_kb())
+        await send_panel(update, text, markup)
 
 
 async def show_premium(update, user, query):
@@ -756,7 +766,20 @@ async def show_token(update, user, chain: str, ca: str, mode: str, query):
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
+    await safe_answer(query)
+    try:
+        await _dispatch_callback(update, context, query)
+    except Exception as exc:
+        log.exception("callback %s", getattr(query, "data", None))
+        try:
+            await query.message.reply_text(
+                f"❌ {html.escape(str(exc)[:400])}", parse_mode=HTML
+            )
+        except Exception:
+            pass
+
+
+async def _dispatch_callback(update, context, query) -> None:
     user = load_user(update)
     uid = user["user_id"]
     data = query.data or ""
@@ -776,11 +799,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if user.get("verified"):
             await show_main(update, user, query)
         else:
-            await query.answer("Language updated")
+            await safe_answer(query, "Language updated")
         return
 
     if not user.get("verified"):
-        await query.answer("Complete the captcha first. Send /start.", show_alert=True)
+        await safe_answer(query, "Complete the captcha first. Send /start.", show_alert=True)
         return
 
     if data == "nav:main":
@@ -819,7 +842,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await cmd_summary(update, context)
     elif data == "nav:clear":
         n = db.clear_monitors(uid)
-        await query.answer(f"Cleared {n} tracked tokens")
+        await safe_answer(query, f"Cleared {n} tracked tokens")
         await show_positions(update, user, query)
     elif data == "nav:buysell":
         db.set_state(uid, "await_ca", {})
@@ -846,16 +869,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         chain = data.split(":")[2]
         note = await auto_generate_core(uid, [chain])
         if not note:
-            await query.answer("W1 already exists on this chain", show_alert=True)
+            await safe_answer(query, "W1 already exists on this chain", show_alert=True)
         else:
             await context.bot.send_message(uid, note, parse_mode=HTML)
-            await query.answer("Wallet generated — keys sent in chat")
+            await safe_answer(query, "Wallet generated — keys sent in chat")
         await show_wallets_chain(update, user, chain, query)
     elif data.startswith("wal:regen:"):
         chain = data.split(":")[2]
         n = db.wallet_count(uid, chain)
         if n >= db.max_wallets(user):
-            await query.answer("Wallet limit reached", show_alert=True)
+            await safe_answer(query, "Wallet limit reached", show_alert=True)
             return
         address, secret = generate_for_chain(CHAINS[chain]["kind"])
         name = f"W{n+1}"
@@ -889,7 +912,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         wid = int(data.split(":")[2])
         w = db.get_wallet(wid)
         if not w or w["user_id"] != uid:
-            await query.answer("Wallet not found", show_alert=True)
+            await safe_answer(query, "Wallet not found", show_alert=True)
             return
         text = (
             f"⚙️ <b>{html.escape(w['name'])}</b> — {CHAINS[w['chain']]['name']}\n\n"
@@ -919,7 +942,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         w = db.get_wallet(wid)
         if w and w["user_id"] == uid:
             await context.bot.send_message(uid, f"<code>{w['address']}</code>", parse_mode=HTML)
-            await query.answer("Address sent")
+            await safe_answer(query, "Address sent")
     elif data.startswith("wal:exp:"):
         wid = int(data.split(":")[2])
         w = db.get_wallet(wid)
@@ -927,7 +950,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             try:
                 secret = decrypt_secret(w["enc_key"])
             except Exception:
-                await query.answer("Could not decrypt key", show_alert=True)
+                await safe_answer(query, "Could not decrypt key", show_alert=True)
                 return
             await context.bot.send_message(
                 uid,
@@ -935,7 +958,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 f"<code>{html.escape(secret)}</code>\n\nDo NOT copy this to a clipboard on a shared device.",
                 parse_mode=HTML,
             )
-            await query.answer("Key sent in chat — delete it after saving")
+            await safe_answer(query, "Key sent in chat — delete it after saving")
     elif data.startswith("wal:ren:"):
         wid = int(data.split(":")[2])
         w = db.get_wallet(wid)
@@ -985,10 +1008,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         w = db.get_wallet(int(wid))
         if w and w["user_id"] == uid:
             if db.wallet_count(uid, chain) >= db.max_wallets(user):
-                await query.answer("Wallet limit reached on that chain", show_alert=True)
+                await safe_answer(query, "Wallet limit reached on that chain", show_alert=True)
                 return
             db.add_wallet(uid, chain, w["name"], w["address"], w["enc_key"])
-            await query.answer(f"Imported to {chain}")
+            await safe_answer(query, f"Imported to {chain}")
             await show_wallets_chain(update, user, chain, query)
         return
     elif data.startswith("wal:x:"):
@@ -997,7 +1020,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if not w or w["user_id"] != uid:
             return
         if CHAINS[w["chain"]]["kind"] != "evm":
-            await query.answer("Cross-chain import is for EVM wallets.", show_alert=True)
+            await safe_answer(query, "Cross-chain import is for EVM wallets.", show_alert=True)
             return
         buttons = []
         row = []
@@ -1012,7 +1035,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         buttons.append([kb._btn("⬅️ Back", f"wal:cfg:{wid}")])
         await safe_edit(query, "📥 Import this key to another EVM chain. Select destination:", InlineKeyboardMarkup(buttons))
     elif data.startswith("wal:arr:"):
-        await query.answer("Drag-style rearrange uses the current creation order. Re-import to change order.", show_alert=True)
+        await safe_answer(query, "Drag-style rearrange uses the current creation order. Re-import to change order.", show_alert=True)
     elif data.startswith("set:view:"):
         await show_settings(update, user, data.split(":")[2], query)
     elif data.startswith("set:tog:"):
@@ -1112,7 +1135,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         db.delete_order(int(data.split(":")[2]))
         await show_orders(update, user, query)
     elif data.startswith("or:view:"):
-        await query.answer("Order is active")
+        await safe_answer(query, "Order is active")
     elif data.startswith("pos:del:"):
         db.delete_monitor(int(data.split(":")[2]))
         await show_positions(update, user, query)
@@ -1123,7 +1146,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if m:
             await show_token(update, user, m["chain"], m["token"], "sell", query)
         else:
-            await query.answer("Gone")
+            await safe_answer(query, "Gone")
     elif data.startswith("brx:"):
         _, frm, to = data.split(":")
         db.set_state(uid, "bridge_amt", {"from": frm, "to": to})
@@ -1136,33 +1159,48 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     elif data.startswith("br:"):
         await show_bridge(update, user, query, data.split(":")[1])
     elif data.startswith("pre:"):
-        await query.answer("Premium checkout will be connected next.", show_alert=True)
+        await safe_answer(query, "Premium checkout will be connected next.", show_alert=True)
     elif data == "cash:claim":
-        await query.answer("Nothing to claim yet.", show_alert=True)
+        await safe_answer(query, "Nothing to claim yet.", show_alert=True)
     elif data.startswith("ref:"):
-        await query.answer("Link type saved for the next pass.")
+        await safe_answer(query, "Link type saved for the next pass.")
+    elif data.startswith("fnx:collect:"):
+        chain = data.split(":")[2]
+        res = await collect_native(uid, chain)
+        await safe_edit(query, "📥 <b>Collect</b>\n" + "\n".join(res), kb.back_main())
+    elif data.startswith("fnx:disperse:"):
+        chain = data.split(":")[2]
+        res = await disperse_native(uid, chain, Decimal("90"))
+        await safe_edit(query, "📤 <b>Disperse 90%</b>\n" + "\n".join(res), kb.back_main())
     elif data.startswith("fn:"):
         kind, chain = data.split(":")[1], data.split(":")[2]
-        title = "Collect" if kind == "collect" else "Disperse"
         wallets = db.list_wallets(uid, chain)
         if len(wallets) < 2:
-            await query.answer("You need at least 2 wallets on this chain.", show_alert=True)
+            await safe_answer(query, "You need at least 2 wallets on this chain.", show_alert=True)
             return
         names = "\n".join(f"• {w['name']} — <code>{w['address']}</code>" for w in wallets)
-        await safe_edit(
-            query,
-            f"🔀 <b>{title} — {CHAINS[chain]['name']}</b>\n\n{names}\n\n"
-            "On-chain collect/disperse will be connected in the next pass. Wallets are ready.",
-            kb.back_main(),
-        )
+        if kind == "collect":
+            await safe_edit(
+                query,
+                f"📥 <b>Collect {CHAINS[chain]['native']}</b> into Default.\n\n{names}",
+                kb.confirm_kb(f"fnx:collect:{chain}", "nav:main"),
+            )
+        else:
+            db.set_state(uid, "disperse_pct", {"chain": chain})
+            await safe_edit(
+                query,
+                f"📤 <b>Disperse {CHAINS[chain]['native']}</b> from Default.\n\n{names}\n\n"
+                "Reply with percent (e.g. 80) or Confirm for 90%.",
+                kb.confirm_kb(f"fnx:disperse:{chain}", "nav:main"),
+            )
     elif data.startswith("tk:"):
         await handle_token_cb(update, context, user, data, query)
     else:
-        await query.answer()
+        await safe_answer(query)
 
 
 async def _do_buy(query, uid, chain, ca, amt: Decimal):
-    await query.answer("Submitting buy…")
+    await safe_answer(query, "Submitting buy…")
     try:
         res = await execute_buy(uid, chain, ca, amt, multi=True)
         db.add_monitor(uid, chain, ca)
@@ -1176,7 +1214,7 @@ async def _do_buy(query, uid, chain, ca, amt: Decimal):
 
 
 async def _do_sell(query, uid, chain, ca, amount, pct):
-    await query.answer("Submitting sell…")
+    await safe_answer(query, "Submitting sell…")
     try:
         res = await execute_sell(uid, chain, ca, amount, pct, multi=True)
         await safe_edit(
@@ -1197,7 +1235,7 @@ async def handle_token_cb(update, context, user, data, query):
     action = parts[1]
     chain = parts[2] if len(parts) > 2 else chain
     if not ca:
-        await query.answer("Paste a token CA first.", show_alert=True)
+        await safe_answer(query, "Paste a token CA first.", show_alert=True)
         return
     if action == "sell":
         await show_token(update, user, chain, ca, "sell", query)
@@ -1206,7 +1244,7 @@ async def handle_token_cb(update, context, user, data, query):
     elif action == "track":
         db.add_monitor(uid, chain, ca)
         await show_token(update, user, chain, ca, "buy", query)
-        await query.answer("Tracking")
+        await safe_answer(query, "Tracking")
     elif action == "cycle":
         info = await resolve_token(ca, None)
         nxt = info.get("chain") or chain
@@ -1234,7 +1272,7 @@ async def handle_token_cb(update, context, user, data, query):
     elif action == "go":
         pending = payload.get("pending_buy")
         if not pending:
-            await query.answer("Nothing to confirm", show_alert=True)
+            await safe_answer(query, "Nothing to confirm", show_alert=True)
             return
         db.set_state(uid, "token", {"chain": chain, "ca": ca, "mode": "buy"})
         await _do_buy(query, uid, chain, ca, Decimal(pending))
@@ -1250,7 +1288,7 @@ async def handle_token_cb(update, context, user, data, query):
         }
         await safe_edit(query, "✏️ " + hints[action], kb.back_main())
     elif action == "ape":
-        await query.answer("Ape max…")
+        await safe_answer(query, "Ape max…")
         try:
             res = await ape_max(uid, chain, ca)
             db.add_monitor(uid, chain, ca)
@@ -1262,7 +1300,7 @@ async def handle_token_cb(update, context, user, data, query):
         await _do_sell(query, uid, chain, ca, None, pct)
     elif action == "snipe":
         db.add_snipe(uid, chain, ca, settings_map(uid, chain)["buy_amount"])
-        await query.answer("Auto-snipe armed — fires when liquidity appears")
+        await safe_answer(query, "Auto-snipe armed — fires when liquidity appears")
         await show_snipe(update, user, query)
     elif action == "blim":
         db.set_state(uid, "or_add", {"side": "buy", "chain": chain, "ca": ca})
@@ -1271,12 +1309,25 @@ async def handle_token_cb(update, context, user, data, query):
         db.set_state(uid, "or_add", {"side": "sell", "chain": chain, "ca": ca})
         await safe_edit(query, "⚙️ Sell Limit — reply with <code>PRICE PERCENT</code>\nExample: <code>0.00001 50%</code>.", kb.back_main())
     elif action in ("slip", "gas", "multi"):
-        await query.answer("Uses ⚙️ Global Settings for this chain.", show_alert=True)
+        await safe_answer(query, "Uses ⚙️ Global Settings for this chain.", show_alert=True)
     else:
-        await query.answer()
+        await safe_answer(query)
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await _on_text(update, context)
+    except Exception as exc:
+        log.exception("on_text")
+        try:
+            await update.effective_message.reply_text(
+                f"❌ {html.escape(str(exc)[:400])}", parse_mode=HTML
+            )
+        except Exception:
+            pass
+
+
+async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_message or not update.effective_message.text:
         return
     user = load_user(update)

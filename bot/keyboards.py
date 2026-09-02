@@ -3,12 +3,6 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOpti
 from bot.config import (
     CHAINS,
     CHAIN_ORDER,
-    HUB_URL,
-    UPDATES_URL,
-    TWITTER_URL,
-    DOCS_URL,
-    SUPPORT_URL,
-    MORE_LINKS_URL,
 )
 
 
@@ -18,10 +12,6 @@ def lp() -> LinkPreviewOptions:
 
 def _btn(text: str, data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text, callback_data=data)
-
-
-def _url(text: str, url: str) -> InlineKeyboardButton:
-    return InlineKeyboardButton(text, url=url)
 
 
 def main_menu_kb(lang: str = "en") -> InlineKeyboardMarkup:
@@ -35,22 +25,12 @@ def main_menu_kb(lang: str = "en") -> InlineKeyboardMarkup:
         [_btn("🎯 Auto Snipe", "nav:snipe"), _btn("↔️ Bridge", "nav:bridge")],
         [_btn("⭐ Premium", "nav:premium"), _btn(cash, "nav:cash"), _btn("💰 Referral", "nav:ref")],
         [_btn("⚡ BUY & SELL NOW!", "nav:buysell")],
-        [
-            _url("Hub", HUB_URL),
-            _url("Updates", UPDATES_URL),
-            _url("X (Twitter)", TWITTER_URL),
-        ],
-        [
-            _url("Docs", DOCS_URL),
-            _url("Support", SUPPORT_URL),
-            _url("More Links", MORE_LINKS_URL),
-        ],
     ]
     return InlineKeyboardMarkup(rows)
 
 
 def authorized_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[_btn("🇨🇳", "nav:lang:zh"), _btn("🇺🇸", "nav:lang:en")]])
+    return InlineKeyboardMarkup([[_btn("🇨🇳", "nav:lang:zh")]])
 
 
 def back_main(extra: list | None = None) -> InlineKeyboardMarkup:
@@ -265,14 +245,35 @@ def positions_kb(monitors: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def bridge_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [_btn("⚡ Relay", "br:relay"), _btn("🌉 deBridge", "br:debridge")],
-            [_btn("🕵️ HoudiniSwap (Private)", "br:private"), _btn("🟦 Arc → USDC", "br:arc")],
-            [_btn("⬅️ Main Menu", "nav:main")],
-        ]
-    )
+def bridge_kb(enabled: list[str] | None = None) -> InlineKeyboardMarkup:
+    rows = [
+        [_btn("⚡ Relay", "br:relay"), _btn("🌉 deBridge", "br:debridge")],
+        [_btn("🕵️ HoudiniSwap (Private)", "br:private"), _btn("🟦 Arc → USDC", "br:arc")],
+    ]
+    pairs = [
+        ("ETH", "SOL"),
+        ("SOL", "ETH"),
+        ("ETH", "BSC"),
+        ("BSC", "ETH"),
+        ("ETH", "BASE"),
+        ("BASE", "ETH"),
+        ("ETH", "ARB"),
+        ("ARB", "ETH"),
+        ("SOL", "BSC"),
+        ("BSC", "SOL"),
+    ]
+    enabled = set(enabled or CHAIN_ORDER)
+    row = []
+    for a, b in pairs:
+        if a in enabled and b in enabled:
+            row.append(_btn(f"{a} → {b}", f"brx:{a}:{b}"))
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+    if row:
+        rows.append(row)
+    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    return InlineKeyboardMarkup(rows)
 
 
 def premium_kb() -> InlineKeyboardMarkup:
