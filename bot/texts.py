@@ -200,32 +200,22 @@ def help_text(lang: str) -> str:
     return t(
         lang,
         f"📖 <b>{BOT_NAME} — useful commands</b>\n\n"
-        "/start — Open the main menu\n"
-        "/chains — Enable or disable chains and set up wallets\n"
-        "/wallets — View wallets for all chains (/wallets_ETH for ETH)\n"
-        "/quick — Quick settings for all chains (/quick_ETH for ETH)\n"
-        "/monitor — Open the trade monitor\n"
-        "/summary — Summary of active trade monitors\n"
-        "/orders — View active limit orders\n"
-        "/pos — View active positions\n"
-        "/autosnipe — View active auto-snipes across chains\n"
-        "/bridge /relay /debridge /private /arc — Bridge routes\n"
-        "/collect — Send funds from multiple wallets into one\n"
-        "/disperse — Send funds from one wallet to many\n"
-        "/import — Import wallet to another compatible chain\n"
-        "/premium — Upgrade to Premium\n"
-        "/referral — Referral stats and options\n"
-        "/cashback — Trading fee rebates\n"
-        "/rewards — Start and claim rewards\n"
-        "/mvp — View your MVP holdings\n"
-        "/trending — Top trending tokens (Premium only)\n"
-        "/pumpfun — PumpFun cashback claim panel\n"
-        "/cleartrades — Clear all tracked tokens\n"
-        "/support — Bot manual and 24/7 live support\n"
-        "/help — This list\n\n"
+        "/start /metro /sniper /menu — Main menu\n"
+        "/chains /eth /sol /bsc /base /arb /avax — Chains & wallets\n"
+        "/wallets /balance /export /import /collect /disperse\n"
+        "/quick /settings — Gas, slippage, Anti-MEV\n"
+        "/copytrade /signals /scraper — Copy & call channels\n"
+        "/autosnipe /godmode /presale /snipe — Snipes\n"
+        "/orders /dca /limits — Limits & DCA\n"
+        "/pos /pnl /monitor /summary /cleartrades\n"
+        "/buy /sell /buysell /scan /chart /approve — Paste a CA\n"
+        "/bridge /relay /debridge /private /arc\n"
+        "/premium /cashback /claim /rewards /campaigns /competition /mvp /referral\n"
+        "/trending /pumpfun /language /cancel /ping /tutorial /faq /docs\n"
+        "/support /help\n\n"
         f"Paste a token CA anytime to open the Token Report.\n"
         f"Docs: {DOCS_URL}\nSupport: {SUPPORT_URL}",
-        f"📖 <b>{BOT_NAME} 常用命令</b>\n\n发送 /start 打开主菜单，粘贴合约地址即可交易。",
+        f"📖 <b>{BOT_NAME} 常用命令</b>\n\n发送 /start /metro /sniper 打开主菜单，粘贴合约地址即可交易。/help 查看全部命令。",
     )
 
 

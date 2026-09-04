@@ -154,6 +154,7 @@ def init_db() -> None:
         _col("users", "fee_credit", "TEXT DEFAULT '{}'")
         _col("wallets", "sort_order", "INTEGER DEFAULT 0")
         _col("copytrade", "buy_pct", "TEXT")
+        _col("orders", "last_fire", "REAL DEFAULT 0")
 
 
 def ensure_user(user_id: int, username: str | None, first_name: str | None) -> dict:
@@ -597,6 +598,44 @@ def list_copytrade_all() -> list[dict]:
 def update_order_status(item_id: int, status: str) -> None:
     with connect() as con:
         con.execute("UPDATE orders SET status=? WHERE id=?", (status, item_id))
+
+
+def update_order(item_id: int, **fields: Any) -> None:
+    if not fields:
+        return
+    keys = ", ".join(f"{k}=?" for k in fields)
+    vals = list(fields.values()) + [item_id]
+    with connect() as con:
+        con.execute(f"UPDATE orders SET {keys} WHERE id=?", vals)
+
+
+def trade_stats(user_id: int) -> dict:
+    with connect() as con:
+        total = con.execute(
+            "SELECT COUNT(*) AS c FROM trades WHERE user_id=?", (user_id,)
+        ).fetchone()["c"]
+        buys = con.execute(
+            "SELECT COUNT(*) AS c FROM trades WHERE user_id=? AND side='buy'",
+            (user_id,),
+        ).fetchone()["c"]
+        sells = con.execute(
+            "SELECT COUNT(*) AS c FROM trades WHERE user_id=? AND side='sell'",
+            (user_id,),
+        ).fetchone()["c"]
+        ahead = con.execute(
+            """
+            SELECT COUNT(*) AS c FROM (
+                SELECT user_id, COUNT(*) AS n FROM trades GROUP BY user_id
+            ) WHERE n > ?
+            """,
+            (int(total),),
+        ).fetchone()["c"]
+    return {
+        "total": int(total),
+        "buys": int(buys),
+        "sells": int(sells),
+        "rank": int(ahead) + 1,
+    }
 
 
 def add_signal(user_id: int, source: str, chain: str = "ETH") -> dict:

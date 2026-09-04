@@ -882,6 +882,26 @@ async def _dispatch_callback(update, context, query) -> None:
         await show_positions(update, user, query)
     elif data == "nav:snipe":
         await show_snipe(update, user, query)
+    elif data == "nav:god":
+        from bot.extra_cmds import show_godmode
+
+        await show_godmode(update, user, query)
+    elif data == "nav:dca":
+        from bot.extra_cmds import show_dca
+
+        await show_dca(update, user, query)
+    elif data == "nav:camp":
+        from bot.extra_cmds import show_campaigns
+
+        await show_campaigns(update, user, query)
+    elif data == "nav:comp":
+        from bot.extra_cmds import show_competition
+
+        await show_competition(update, user, query)
+    elif data == "nav:presale":
+        from bot.extra_cmds import show_presale
+
+        await show_presale(update, user, query)
     elif data == "nav:bridge":
         await show_bridge(update, user, query, "relay")
     elif data == "nav:premium":
@@ -1203,8 +1223,17 @@ async def _dispatch_callback(update, context, query) -> None:
             await show_snipe(update, user, query)
     elif data.startswith("or:add:"):
         side = data.split(":")[2]
-        db.set_state(uid, "or_add", {"side": side})
-        await safe_edit(query, f"🕓 Reply with: <code>CHAIN CA PRICE AMOUNT</code>\nExample: <code>ETH 0xabc... 0.0001 0.05</code>", kb.back_main())
+        if side == "dca":
+            from bot.extra_cmds import show_dca
+
+            await show_dca(update, user, query)
+        else:
+            db.set_state(uid, "or_add", {"side": side})
+            await safe_edit(
+                query,
+                "🕓 Reply with: <code>CHAIN CA PRICE AMOUNT</code>\nExample: <code>ETH 0xabc... 0.0001 0.05</code>",
+                kb.back_main(),
+            )
     elif data.startswith("or:del:"):
         db.delete_order(int(data.split(":")[2]))
         await show_orders(update, user, query)
@@ -1473,13 +1502,66 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     ca = extract_ca(text)
+    if state == "await_approve" and ca:
+        chain = guess_chain(ca, uid)
+        try:
+            res = await approve_token(uid, chain, ca)
+            db.set_state(uid, "token", {"chain": chain, "ca": ca, "mode": "buy"})
+            await send_panel(update, "✅ <b>Approve</b>\n" + "\n".join(res), kb.token_buy_kb(chain, ca))
+        except Exception as exc:
+            await send_panel(update, f"❌ {html.escape(str(exc)[:400])}")
+        return
+
+    if state == "presale_add":
+        parts = text.split()
+        chain = None
+        amt = None
+        token = ca
+        if parts and parts[0].upper() in CHAINS:
+            chain = parts[0].upper()
+            token = extract_ca(parts[1] if len(parts) > 1 else text) or (parts[1] if len(parts) > 1 else None)
+            amt = parts[2] if len(parts) > 2 else None
+        if not token:
+            await send_panel(update, "Format: <code>CHAIN CA AMOUNT</code>")
+            return
+        chain = chain or guess_chain(token, uid)
+        amt = amt or settings_map(uid, chain)["buy_amount"]
+        db.add_snipe(uid, chain, token, amt)
+        db.set_state(uid, None)
+        await send_panel(
+            update,
+            f"🚀 Presale snipe armed on <b>{chain}</b> for {html.escape(str(amt))} — fires when liquidity appears.\n<code>{html.escape(token)}</code>",
+        )
+        await show_snipe(update, user, None)
+        return
+
+    if state == "dca_add":
+        parts = text.split()
+        if len(parts) < 4:
+            await send_panel(update, "Format: <code>CHAIN CA AMOUNT MINUTES</code>\nExample: <code>ETH 0xabc... 0.05 60</code>")
+            return
+        chain = parts[0].upper()
+        if chain not in CHAINS:
+            await send_panel(update, "Unknown chain. Example: ETH 0xabc... 0.05 60")
+            return
+        token = extract_ca(parts[1]) or parts[1]
+        db.add_order(uid, chain, token, "buy", "dca", parts[3], parts[2])
+        db.set_state(uid, None)
+        await send_panel(
+            update,
+            f"📅 DCA armed: buy {html.escape(parts[2])} {CHAINS[chain]['native']} of <code>{html.escape(token)}</code> every {html.escape(parts[3])} minutes.",
+        )
+        await show_orders(update, user, None)
+        return
+
     if ca and state in (None, "await_ca", "token", "sig_wait"):
         chain = guess_chain(ca, uid)
+        mode = payload.get("mode") or "buy"
         msg = update.effective_message
         fwd = ""
         if getattr(msg, "forward_from_chat", None):
             fwd = (msg.forward_from_chat.username or str(msg.forward_from_chat.id) or "").lstrip("@")
-        await show_token(update, user, chain, ca, "buy", None)
+        await show_token(update, user, chain, ca, mode, None)
         if fwd:
             tracked = {s["source"].lstrip("@").lower() for s in db.list_signals(uid)}
             if fwd.lower() in tracked:

@@ -31,6 +31,27 @@ async def tick_orders(bot) -> None:
     for r in rows:
         o = dict(r)
         try:
+            ttype = (o.get("trigger_type") or "price").lower()
+            if ttype == "dca":
+                try:
+                    interval_min = float(str(o["trigger_value"]).split("|")[0])
+                except Exception:
+                    interval_min = 60.0
+                last = float(o.get("last_fire") or 0)
+                if last and (time.time() - last) < interval_min * 60:
+                    continue
+                amt = Decimal(str(o["amount"] or "0") or "0")
+                if amt <= 0:
+                    continue
+                res = await execute_buy(o["user_id"], o["chain"], o["token"], amt, multi=True)
+                db.update_order(o["id"], last_fire=time.time())
+                await notify(
+                    bot,
+                    o["user_id"],
+                    f"📅 <b>DCA buy</b> {o['chain']} every {interval_min:g}m\n<code>{o['token']}</code>\n"
+                    + "\n".join(res),
+                )
+                continue
             info = await resolve_token(o["token"], o["chain"])
             price = Decimal(str(info.get("price") or 0))
             if price <= 0:

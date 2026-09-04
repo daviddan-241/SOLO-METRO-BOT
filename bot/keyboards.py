@@ -227,6 +227,7 @@ def orders_kb(orders: list) -> InlineKeyboardMarkup:
             ]
         )
     rows.append([_btn("➕ Add Buy Limit", "or:add:buy"), _btn("➕ Add Sell Limit", "or:add:sell")])
+    rows.append([_btn("📅 Add DCA", "or:add:dca")])
     rows.append([_btn("⬅️ Main Menu", "nav:main")])
     return InlineKeyboardMarkup(rows)
 

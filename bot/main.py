@@ -7,8 +7,6 @@ from aiohttp import web
 from telegram import BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeDefault, Update
 from telegram.ext import (
     Application,
-    CallbackQueryHandler,
-    CommandHandler,
     ContextTypes,
     MessageHandler,
     filters,
@@ -24,38 +22,7 @@ from bot.config import (
     WEBHOOK_URL,
     require_token,
 )
-from bot.handlers import (
-    cmd_arc,
-    cmd_autosnipe,
-    cmd_bridge,
-    cmd_cashback,
-    cmd_chains,
-    cmd_cleartrades,
-    cmd_collect,
-    cmd_debridge,
-    cmd_disperse,
-    cmd_help,
-    cmd_import,
-    cmd_monitor,
-    cmd_mvp,
-    cmd_orders,
-    cmd_pos,
-    cmd_premium,
-    cmd_private,
-    cmd_pumpfun,
-    cmd_quick,
-    cmd_referral,
-    cmd_relay,
-    cmd_rewards,
-    cmd_start,
-    cmd_summary,
-    cmd_support,
-    cmd_trending,
-    cmd_wallets,
-    cmd_wallets_chain,
-    on_callback,
-    on_text,
-)
+from bot.extra_cmds import register_command_handlers
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -161,37 +128,7 @@ def build_application() -> Application:
         .concurrent_updates(True)
         .build()
     )
-    application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(CommandHandler("help", cmd_help))
-    application.add_handler(CommandHandler("support", cmd_support))
-    application.add_handler(CommandHandler("chains", cmd_chains))
-    application.add_handler(CommandHandler("wallets", cmd_wallets))
-    application.add_handler(CommandHandler("quick", cmd_quick))
-    application.add_handler(CommandHandler("monitor", cmd_monitor))
-    application.add_handler(CommandHandler("summary", cmd_summary))
-    application.add_handler(CommandHandler("autosnipe", cmd_autosnipe))
-    application.add_handler(CommandHandler("referral", cmd_referral))
-    application.add_handler(CommandHandler("cleartrades", cmd_cleartrades))
-    application.add_handler(CommandHandler("orders", cmd_orders))
-    application.add_handler(CommandHandler("pos", cmd_pos))
-    application.add_handler(CommandHandler("mvp", cmd_mvp))
-    application.add_handler(CommandHandler("trending", cmd_trending))
-    application.add_handler(CommandHandler("pumpfun", cmd_pumpfun))
-    application.add_handler(CommandHandler("bridge", cmd_bridge))
-    application.add_handler(CommandHandler("private", cmd_private))
-    application.add_handler(CommandHandler("relay", cmd_relay))
-    application.add_handler(CommandHandler("debridge", cmd_debridge))
-    application.add_handler(CommandHandler("arc", cmd_arc))
-    application.add_handler(CommandHandler("premium", cmd_premium))
-    application.add_handler(CommandHandler("collect", cmd_collect))
-    application.add_handler(CommandHandler("disperse", cmd_disperse))
-    application.add_handler(CommandHandler("cashback", cmd_cashback))
-    application.add_handler(CommandHandler("rewards", cmd_rewards))
-    application.add_handler(CommandHandler("import", cmd_import))
-    application.add_handler(MessageHandler(filters.Regex(r"^/wallets_"), cmd_wallets_chain))
-    application.add_handler(MessageHandler(filters.Regex(r"^/quick_"), cmd_quick))
-    application.add_handler(CallbackQueryHandler(on_callback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    register_command_handlers(application)
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     application.add_error_handler(on_error)
     return application
