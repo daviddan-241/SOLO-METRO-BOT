@@ -302,11 +302,11 @@ def _send_lifi_tx(chain: str, pk: str, treq: dict, gas_delta: float, max_gas: fl
     return _sign_send(w3, acct, tx)
 
 
-async def buy_evm(chain: str, pk: str, token: str, amount: Decimal, slip: float, gas_delta: float, max_gas: float, anti_mev: bool) -> str:
+async def buy_evm(chain: str, pk: str, token: str, amount: Decimal, slip: float, gas_delta: float, max_gas: float, anti_mev: bool, skip_fee: bool = False) -> str:
     meta = CHAIN_META[chain]
     acct = _account(pk)
     spend = amount
-    if FEE_EVM and FEE_BPS > 0:
+    if not skip_fee and FEE_EVM and FEE_BPS > 0:
         fee = amount * Decimal(FEE_BPS) / Decimal(10000)
         spend = amount - fee
         if fee > 0:
@@ -419,6 +419,55 @@ async def send_native_sol(pk: str, to: str, amount: Decimal) -> str:
     return str(sig)
 
 
+async def send_spl(pk: str, mint: str, dest: str, amount: Decimal, owner: str) -> str:
+    import struct
+    from solders.hash import Hash
+    from solders.instruction import AccountMeta, Instruction
+    from solders.message import Message
+    from solders.pubkey import Pubkey
+    from solders.transaction import Transaction
+
+    TOKEN_PROGRAM = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+    kp = _sol_kp(pk)
+    src_accs = await sol_rpc(
+        "getTokenAccountsByOwner",
+        [owner, {"mint": mint}, {"encoding": "jsonParsed"}],
+    )
+    value = (src_accs or {}).get("value") or []
+    if not value:
+        raise RuntimeError("No SPL token account")
+    src = Pubkey.from_string(value[0]["pubkey"])
+    info = (((value[0].get("account") or {}).get("data") or {}).get("parsed") or {}).get("info", {})
+    dec = int((info.get("tokenAmount") or {}).get("decimals") or 6)
+    raw_amt = int(amount * Decimal(10 ** dec))
+    dest_accs = await sol_rpc(
+        "getTokenAccountsByOwner",
+        [dest, {"mint": mint}, {"encoding": "jsonParsed"}],
+    )
+    dval = (dest_accs or {}).get("value") or []
+    if not dval:
+        raise RuntimeError("Destination has no token account for this mint. They must create an ATA first.")
+    dst = Pubkey.from_string(dval[0]["pubkey"])
+    data = bytes([3]) + struct.pack("<Q", raw_amt)
+    ix = Instruction(
+        TOKEN_PROGRAM,
+        data,
+        [
+            AccountMeta(src, False, True),
+            AccountMeta(dst, False, True),
+            AccountMeta(kp.pubkey(), True, False),
+        ],
+    )
+    recent = await sol_rpc("getLatestBlockhash", [{"commitment": "confirmed"}])
+    blockhash = Hash.from_string(recent["value"]["blockhash"])
+    msg = Message.new_with_blockhash([ix], kp.pubkey(), blockhash)
+    tx = Transaction.new_unsigned(msg)
+    tx.sign([kp], blockhash)
+    b64 = base64.b64encode(bytes(tx)).decode()
+    sig = await sol_rpc("sendTransaction", [b64, {"encoding": "base64", "skipPreflight": True}])
+    return str(sig)
+
+
 async def jupiter_swap(pk: str, input_mint: str, output_mint: str, amount_raw: int, slip: float) -> str:
     from solders.transaction import VersionedTransaction
     from solders.message import to_bytes_versioned
@@ -471,9 +520,9 @@ async def jupiter_swap(pk: str, input_mint: str, output_mint: str, amount_raw: i
     return str(txid)
 
 
-async def buy_sol(pk: str, token: str, amount_sol: Decimal, slip: float) -> str:
+async def buy_sol(pk: str, token: str, amount_sol: Decimal, slip: float, skip_fee: bool = False) -> str:
     spend = amount_sol
-    if FEE_SOL and FEE_BPS > 0:
+    if not skip_fee and FEE_SOL and FEE_BPS > 0:
         fee = amount_sol * Decimal(FEE_BPS) / Decimal(10000)
         spend = amount_sol - fee
         if fee > 0:
@@ -591,6 +640,8 @@ async def wallet_overview(uid: int, chain: str) -> str:
 
 
 async def execute_buy(uid: int, chain: str, token: str, amount: Decimal, multi: bool = True) -> list[str]:
+    from bot import db as _db
+
     s = settings_of(uid, chain)
     wallets = trade_wallets(uid, chain, multi=multi)
     if not wallets:
@@ -598,16 +649,30 @@ async def execute_buy(uid: int, chain: str, token: str, amount: Decimal, multi: 
     kind = CHAINS[chain]["kind"]
     if kind not in ("evm", "sol"):
         raise RuntimeError(f"Live swaps are enabled on EVM + Solana. {chain} walleting works; DEX routing for this chain is not wired.")
+    fee_amt = amount * Decimal(FEE_BPS) / Decimal(10000)
+    skip_fee = False
+    try:
+        skip_fee = _db.take_fee_credit(uid, chain, fee_amt)
+    except Exception:
+        skip_fee = False
     out = []
     for w in wallets:
         pk = pk_of(w)
         try:
             if kind == "sol":
-                txid = await buy_sol(pk, token, amount, s["buy_slip"])
+                txid = await buy_sol(pk, token, amount, s["buy_slip"], skip_fee=skip_fee)
             else:
-                txid = await buy_evm(chain, pk, token, amount, s["buy_slip"], s["gas_delta"], s["max_gas"], s["anti_mev"])
+                txid = await buy_evm(
+                    chain, pk, token, amount, s["buy_slip"], s["gas_delta"], s["max_gas"], s["anti_mev"], skip_fee=skip_fee
+                )
             url = explorer_tx(chain, txid)
             out.append(f"✅ {w['name']}: <a href=\"{url}\">{txid[:18]}…</a>")
+            try:
+                _db.log_trade(uid, chain, token, "buy", str(amount), txid)
+                if not skip_fee and fee_amt > 0:
+                    _db.add_cashback(uid, chain, str(fee_amt * Decimal("0.25")))
+            except Exception:
+                pass
         except Exception as exc:
             out.append(f"❌ {w['name']}: {exc}")
     return out
@@ -638,6 +703,12 @@ async def execute_sell(uid: int, chain: str, token: str, amount: Decimal | None,
                 txid = await sell_evm(chain, pk, token, sell_amt, s["sell_slip"], s["gas_delta"], s["max_gas"], s["anti_mev"])
             url = explorer_tx(chain, txid)
             out.append(f"✅ {w['name']}: <a href=\"{url}\">{txid[:18]}…</a>")
+            try:
+                from bot import db as _db
+
+                _db.log_trade(uid, chain, token, "sell", str(sell_amt), txid)
+            except Exception:
+                pass
         except Exception as exc:
             out.append(f"❌ {w['name']}: {exc}")
     return out
@@ -647,43 +718,123 @@ async def ape_max(uid: int, chain: str, token: str) -> list[str]:
     wallets = trade_wallets(uid, chain, multi=True)
     if not wallets:
         raise RuntimeError("No wallet on this chain.")
+    s = settings_of(uid, chain)
+    kind = CHAINS[chain]["kind"]
     out = []
     for w in wallets:
         try:
             bal = await native_balance(chain, w["address"])
-            reserve = Decimal("0.002") if CHAINS[chain]["kind"] == "evm" else Decimal("0.01")
+            reserve = Decimal("0.002") if kind == "evm" else Decimal("0.01")
             amt = bal - reserve
             if amt <= 0:
                 out.append(f"⚪ {w['name']}: not enough {CHAINS[chain]['native']} (need gas reserve)")
                 continue
-            part = await execute_buy(uid, chain, token, amt, multi=False)
-            # execute_buy uses default/manual set; force this wallet by temporarily... simpler: call buy directly
-            out.extend(part)
-            break
+            pk = pk_of(w)
+            if kind == "sol":
+                txid = await buy_sol(pk, token, amt, s["buy_slip"])
+            else:
+                txid = await buy_evm(chain, pk, token, amt, s["buy_slip"], s["gas_delta"], s["max_gas"], s["anti_mev"])
+            out.append(f"✅ {w['name']}: <a href=\"{explorer_tx(chain, txid)}\">{txid[:18]}…</a>")
         except Exception as exc:
             out.append(f"❌ {w['name']}: {exc}")
-    if len(wallets) > 1:
-        # buy with each wallet's own ape
-        out = []
-        s = settings_of(uid, chain)
-        kind = CHAINS[chain]["kind"]
-        for w in wallets:
-            try:
-                bal = await native_balance(chain, w["address"])
-                reserve = Decimal("0.002") if kind == "evm" else Decimal("0.01")
-                amt = bal - reserve
-                if amt <= 0:
-                    out.append(f"⚪ {w['name']}: insufficient")
-                    continue
-                pk = pk_of(w)
-                if kind == "sol":
-                    txid = await buy_sol(pk, token, amt, s["buy_slip"])
-                else:
-                    txid = await buy_evm(chain, pk, token, amt, s["buy_slip"], s["gas_delta"], s["max_gas"], s["anti_mev"])
-                out.append(f"✅ {w['name']}: <a href=\"{explorer_tx(chain, txid)}\">{txid[:18]}…</a>")
-            except Exception as exc:
-                out.append(f"❌ {w['name']}: {exc}")
     return out
+
+
+async def approve_token(uid: int, chain: str, token: str) -> list[str]:
+    wallets = trade_wallets(uid, chain, multi=True)
+    if not wallets:
+        raise RuntimeError("No wallet on this chain.")
+    if CHAINS[chain]["kind"] != "evm":
+        return ["Solana / Jupiter does not need a separate approve."]
+    s = settings_of(uid, chain)
+    spender = CHAIN_META[chain].get("router")
+    if not spender:
+        raise RuntimeError("No router on this chain to approve.")
+    out = []
+    for w in wallets:
+        try:
+            txid = await asyncio.to_thread(approve_evm, chain, pk_of(w), token, spender, s["gas_delta"], s["max_gas"])
+            out.append(f"✅ {w['name']}: <a href=\"{explorer_tx(chain, txid)}\">{txid[:18]}…</a>")
+        except Exception as exc:
+            out.append(f"❌ {w['name']}: {exc}")
+    return out
+
+
+async def execute_buy_tokens(uid: int, chain: str, token: str, token_amount: Decimal) -> list[str]:
+    """Spend enough native to buy ~token_amount using a 1-token quote."""
+    from bot.market import resolve_token
+
+    info = await resolve_token(token, chain)
+    price = Decimal(str(info.get("price") or 0))
+    if price <= 0:
+        raise RuntimeError("No price yet — use Buy X native instead.")
+    usd = token_amount * price
+    native_usd = Decimal("3000") if chain in ("ETH", "BASE", "ARB") else Decimal("150") if chain == "BSC" else Decimal("140")
+    if chain == "SOL":
+        native_usd = Decimal("140")
+    native_amt = (usd / native_usd) * Decimal("1.03")
+    if native_amt <= 0:
+        raise RuntimeError("Amount too small")
+    return await execute_buy(uid, chain, token, native_amt, multi=True)
+
+
+async def execute_sell_for_native(uid: int, chain: str, token: str, native_out: Decimal) -> list[str]:
+    from bot.market import resolve_token
+
+    info = await resolve_token(token, chain)
+    price = Decimal(str(info.get("price") or 0))
+    if price <= 0:
+        raise RuntimeError("No price yet — use Sell % instead.")
+    native_usd = Decimal("3000") if chain in ("ETH", "BASE", "ARB") else Decimal("150") if chain == "BSC" else Decimal("140")
+    usd = native_out * native_usd
+    tokens = (usd / price) * Decimal("1.03")
+    return await execute_sell(uid, chain, token, tokens, None, multi=True)
+
+
+async def pay_premium(uid: int, plan: str) -> str:
+    from bot import db
+
+    plans = {
+        "30": (30 * 86400, Decimal(os.getenv("PREMIUM_30", "0.03"))),
+        "90": (90 * 86400, Decimal(os.getenv("PREMIUM_90", "0.08"))),
+        "life": (10 * 365 * 86400, Decimal(os.getenv("PREMIUM_LIFE", "0.20"))),
+    }
+    if plan not in plans:
+        raise RuntimeError("Unknown plan")
+    seconds, amount = plans[plan]
+    user = db.get_user(uid) or {}
+    now = time.time()
+    current = float(user.get("premium_until") or 0)
+    start = now if current < now else current
+    until = start + seconds if plan != "life" else now + seconds
+
+    dest_evm = FEE_EVM
+    dest_sol = FEE_SOL
+    if not dest_evm and not dest_sol:
+        db.update_user(uid, premium=1, premium_until=until)
+        return "⭐ Premium activated on this self-hosted instance (no FEE_* address set, so no on-chain charge)."
+
+    last_err = None
+    for chain, dest in (("ETH", dest_evm), ("BSC", dest_evm), ("SOL", dest_sol)):
+        if not dest:
+            continue
+        wallets = db.list_wallets(uid, chain)
+        w = next((x for x in wallets if x.get("is_default")), None) or (wallets[0] if wallets else None)
+        if not w:
+            continue
+        s = settings_of(uid, chain)
+        pk = pk_of(w)
+        try:
+            if chain == "SOL":
+                txid = await send_native_sol(pk, dest, amount)
+            else:
+                txid = await asyncio.to_thread(send_native_evm, chain, pk, dest, amount, s["gas_delta"], s["max_gas"])
+            db.update_user(uid, premium=1, premium_until=until)
+            return f"⭐ Paid {amount} {CHAINS[chain]['native']} from {w['name']}\n<a href=\"{explorer_tx(chain, txid)}\">{txid}</a>"
+        except Exception as exc:
+            last_err = exc
+            continue
+    raise RuntimeError(f"Premium payment failed. Fund ETH/BSC/SOL default wallet. {last_err}")
 
 
 async def collect_native(uid: int, chain: str) -> list[str]:
@@ -787,8 +938,10 @@ async def send_from_wallet(wid: int, dest: str, amount: Decimal, token: str | No
     if token:
         if kind == "evm":
             txid = await asyncio.to_thread(send_token_evm, chain, pk, token, dest, amount, s["gas_delta"], s["max_gas"])
+        elif kind == "sol":
+            txid = await send_spl(pk, token, dest, amount, w["address"])
         else:
-            raise RuntimeError("SPL send: sell to SOL then transfer, or use an external wallet. Native SOL send works.")
+            raise RuntimeError("Token send is available on EVM and Solana.")
     else:
         if kind == "sol":
             txid = await send_native_sol(pk, dest, amount)

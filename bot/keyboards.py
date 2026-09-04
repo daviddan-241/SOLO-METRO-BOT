@@ -185,7 +185,7 @@ def copytrade_item_kb(item: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [_btn(mark, f"ct:tog:{item['id']}"), _btn(sell, f"ct:sell:{item['id']}")],
-            [_btn("💰 Buy Amount", f"ct:amt:{item['id']}")],
+            [_btn("💰 Max Buy", f"ct:amt:{item['id']}"), _btn("📊 Buy %", f"ct:pct:{item['id']}")],
             [_btn("⬅️ Copytrade", "nav:copy")],
         ]
     )
@@ -309,7 +309,8 @@ def token_buy_kb(chain: str, ca: str) -> InlineKeyboardMarkup:
     ape = CHAINS[chain].get("ape_max")
     rows = [
         [_btn("📍 Track", f"tk:track:{chain}"), _btn(f"🔄 {chain}", f"tk:cycle:{chain}")],
-        [_btn("💳 Multi", f"tk:multi:{chain}"), _btn("⇔ Go to Sell", f"tk:sell:{chain}")],
+        [_btn("✅ Approve", f"tk:approve:{chain}"), _btn("💳 Multi", f"tk:multi:{chain}")],
+        [_btn("⇔ Go to Sell", f"tk:sell:{chain}")],
         [_btn(f"Buy 0.01 {native}", f"tk:buy:{chain}:0.01"), _btn(f"Buy 0.05 {native}", f"tk:buy:{chain}:0.05")],
         [_btn(f"Buy 0.1 {native}", f"tk:buy:{chain}:0.1"), _btn(f"Buy X {native}", f"tk:buyx:{chain}")],
         [_btn("Buy X Tokens", f"tk:buyt:{chain}")] + ([_btn("🦍 Ape Max", f"tk:ape:{chain}")] if ape else []),

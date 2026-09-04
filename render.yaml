@@ -13,3 +13,19 @@ services:
         value: Solo Metro
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: FORCE_POLLING
+        value: "0"
+      - key: FEE_BPS
+        value: "100"
+      - key: FEE_EVM_ADDRESS
+        sync: false
+      - key: FEE_SOL_ADDRESS
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: PREMIUM_30
+        value: "0.03"
+      - key: PREMIUM_90
+        value: "0.08"
+      - key: PREMIUM_LIFE
+        value: "0.20"

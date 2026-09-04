@@ -31,12 +31,16 @@ from bot.crypto_wallets import (
 )
 from bot.engine import (
     ape_max,
+    approve_token,
     bridge_native,
     collect_native,
     disperse_native,
     execute_buy,
+    execute_buy_tokens,
     execute_sell,
+    execute_sell_for_native,
     native_balance,
+    pay_premium,
     send_from_wallet,
     token_balance,
     wallet_overview,
@@ -141,6 +145,17 @@ def is_contract(text: str) -> bool:
     return False
 
 
+def extract_ca(text: str) -> str | None:
+    m = re.search(r"0x[a-fA-F0-9]{40}", text or "")
+    if m:
+        return m.group(0)
+    for tok in (text or "").split():
+        t = tok.strip().strip(".,)")
+        if SOL_CA.match(t) and not t.startswith("0x") and 32 <= len(t) <= 44:
+            return t
+    return None
+
+
 async def auto_generate_core(uid: int, chains: list[str] | None = None) -> str:
     """Create W1 on core chains if missing. Returns HTML with keys (show once)."""
     created = []
@@ -194,8 +209,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = load_user(update)
     uid = user["user_id"]
     args = context.args or []
-    if args and args[0].startswith("ref_"):
-        code = args[0][4:].upper()
+    payload = (args[0] if args else "") or ""
+    quick = False
+    if payload.startswith("qref_") or payload.startswith("ref_"):
+        quick = payload.startswith("qref_")
+        code = payload.split("_", 1)[-1].upper()
         owner = None
         with db.connect() as con:
             row = con.execute("SELECT user_id FROM users WHERE referral_code=?", (code,)).fetchone()
@@ -207,8 +225,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user.get("verified"):
         await send_captcha(update, user)
         return
-    db.set_state(uid, None)
+    db.set_state(uid, "await_ca" if quick else None)
     await send_panel(update, texts.main_menu(lang_of(user)), kb.main_menu_kb(lang_of(user)))
+    if quick:
+        await send_panel(update, "⚡ Quick-buy link: paste a token CA to trade immediately.")
 
 
 async def handle_captcha_answer(update: Update, user: dict) -> bool:
@@ -396,9 +416,24 @@ async def cmd_mvp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = load_user(update)
     if not await require_auth(update, user):
         return
+    import os
+
+    ca = (os.getenv("MVP_TOKEN_CA") or "").strip()
+    chain = (os.getenv("MVP_TOKEN_CHAIN") or "ETH").upper()
+    held = Decimal("0")
+    if ca:
+        wallets = db.list_wallets(user["user_id"], chain)
+        w = next((x for x in wallets if x.get("is_default")), None) or (wallets[0] if wallets else None)
+        if w:
+            try:
+                held = await token_balance(chain, ca, w["address"])
+            except Exception:
+                held = Decimal("0")
     await send_panel(
         update,
-        f"⭐ <b>MVP Holdings</b>\n\nYou currently hold <b>0</b> {BOT_NAME} MVP tokens.\n\nMVP unlocks boosted cashback and exclusive campaigns.",
+        f"⭐ <b>MVP Holdings</b>\n\nYou currently hold <b>{held}</b> {BOT_NAME} MVP tokens"
+        + (f" on {chain}" if ca else "")
+        + ".\n\nMVP unlocks boosted cashback and exclusive campaigns.",
         kb.back_main(),
     )
 
@@ -419,7 +454,7 @@ async def cmd_pumpfun(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     await send_panel(
         update,
-        "🎃 <b>PumpFun cashback claim panel</b>\n\nEligible Pump.fun trading fees rebate: <b>0 SOL</b>\n\nNothing to claim yet.",
+        "🎃 <b>PumpFun / SOL cashback</b>\n\nTap Claim on the cashback panel to apply SOL trading rebates as fee credit.",
         kb.cashback_kb(),
     )
 
@@ -499,11 +534,7 @@ async def cmd_rewards(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user = load_user(update)
     if not await require_auth(update, user):
         return
-    await send_panel(
-        update,
-        "🎁 <b>Rewards</b>\n\nNo active reward pools right now. Check back after campaigns go live.\n\nOld menu: /cashback",
-        kb.cashback_kb(),
-    )
+    await show_cashback(update, user, None)
 
 
 async def cmd_import(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -634,17 +665,33 @@ async def show_bridge(update, user, query, route: str = "relay"):
 
 
 async def show_premium(update, user, query):
-    status = "⭐ Active" if user.get("premium") else "Standard"
+    import os
+    import time as _t
+
+    until = float(user.get("premium_until") or 0)
+    active = bool(user.get("premium")) and until > _t.time()
+    if user.get("premium") and until and until < _t.time():
+        db.update_user(user["user_id"], premium=0)
+        active = False
+    status = "⭐ Active" if active else "Standard"
+    extra = f" until {__import__('datetime').datetime.utcfromtimestamp(until).strftime('%Y-%m-%d')}" if active and until else ""
+    p30 = os.getenv("PREMIUM_30", "0.03")
+    p90 = os.getenv("PREMIUM_90", "0.08")
+    plife = os.getenv("PREMIUM_LIFE", "0.20")
     text = (
         f"⭐ <b>Upgrade to Premium</b>\n\n"
-        f"Current plan: <b>{status}</b>\n\n"
+        f"Current plan: <b>{status}</b>{extra}\n\n"
         "Premium unlocks:\n"
         "• 10 wallets per chain (instead of 8)\n"
         "• 10 copytrade wallets (instead of 3)\n"
         "• Trending tokens\n"
         "• Extra autosnipe slots\n"
         "• Priority execution\n\n"
-        "Payment rails will be connected in the next pass. The menu is live."
+        f"Pay from your default ETH / BSC / SOL wallet:\n"
+        f"• 30 days — <b>{p30}</b> native\n"
+        f"• 90 days — <b>{p90}</b> native\n"
+        f"• Lifetime — <b>{plife}</b> native\n\n"
+        "Tap a plan, then Confirm. If no FEE_* address is configured, Premium is granted on this instance."
     )
     if query:
         await safe_edit(query, text, kb.premium_kb())
@@ -653,10 +700,17 @@ async def show_premium(update, user, query):
 
 
 async def show_cashback(update, user, query):
+    claimable, life = db.cashback_summary(user["user_id"])
+    def _fmt(d: dict) -> str:
+        if not d:
+            return "0"
+        return ", ".join(f"{v} {k}" for k, v in d.items() if Decimal(str(v or 0)) > 0) or "0"
     text = (
         "💸 <b>Trading fee rebates</b>\n\n"
-        "Cashback continuously rebates a portion of the trading fees you pay through the bot.\n\n"
-        "Claimable: <b>0</b>\nLifetime earned: <b>0</b>\n\n"
+        "Cashback continuously rebates 25% of the protocol fee on successful buys.\n"
+        "Claim applies it as fee credit on your next buy (the 1% tax is skipped until credit is used).\n\n"
+        f"Claimable: <b>{html.escape(_fmt(claimable))}</b>\n"
+        f"Lifetime earned: <b>{html.escape(_fmt(life))}</b>\n\n"
         "Old menu: /rewards"
     )
     if query:
@@ -1035,7 +1089,24 @@ async def _dispatch_callback(update, context, query) -> None:
         buttons.append([kb._btn("⬅️ Back", f"wal:cfg:{wid}")])
         await safe_edit(query, "📥 Import this key to another EVM chain. Select destination:", InlineKeyboardMarkup(buttons))
     elif data.startswith("wal:arr:"):
-        await safe_answer(query, "Drag-style rearrange uses the current creation order. Re-import to change order.", show_alert=True)
+        chain = data.split(":")[2]
+        wallets = db.list_wallets(uid, chain)
+        rows = []
+        for w in wallets:
+            rows.append(
+                [
+                    kb._btn(f"⬆️ {w['name']}", f"wal:up:{w['id']}"),
+                    kb._btn(f"⬇️ {w['name']}", f"wal:dn:{w['id']}"),
+                ]
+            )
+        rows.append([kb._btn("⬅️ Wallets", f"wal:list:{chain}")])
+        await safe_edit(query, "🗄 <b>Rearrange wallets</b>\n\nMove a wallet up or down.", InlineKeyboardMarkup(rows))
+    elif data.startswith("wal:up:") or data.startswith("wal:dn:"):
+        wid = int(data.split(":")[2])
+        w = db.get_wallet(wid)
+        if w and w["user_id"] == uid:
+            db.swap_wallet_order(uid, w["chain"], wid, -1 if data.startswith("wal:up:") else 1)
+            await show_wallets_chain(update, user, w["chain"], query)
     elif data.startswith("set:view:"):
         await show_settings(update, user, data.split(":")[2], query)
     elif data.startswith("set:tog:"):
@@ -1112,6 +1183,9 @@ async def _dispatch_callback(update, context, query) -> None:
     elif data.startswith("ct:amt:"):
         db.set_state(uid, "ct_amt", {"id": int(data.split(":")[2])})
         await safe_edit(query, "💰 Reply with the buy amount in native token.", kb.back_main())
+    elif data.startswith("ct:pct:"):
+        db.set_state(uid, "ct_pct", {"id": int(data.split(":")[2])})
+        await safe_edit(query, "📊 Reply with buy % of their size (example: 100 = same size, 50 = half).", kb.back_main())
     elif data == "sn:add":
         db.set_state(uid, "sn_add_chain", {})
         await safe_edit(query, "🎯 Select a chain button below, then paste the token CA.", kb.snipe_kb(db.list_snipes(uid), enabled(uid)))
@@ -1158,12 +1232,49 @@ async def _dispatch_callback(update, context, query) -> None:
         )
     elif data.startswith("br:"):
         await show_bridge(update, user, query, data.split(":")[1])
+    elif data.startswith("prex:"):
+        plan = data.split(":")[1]
+        try:
+            msg = await pay_premium(uid, plan)
+            user = db.get_user(uid)
+            await safe_edit(query, msg, kb.premium_kb())
+        except Exception as exc:
+            await safe_edit(query, f"❌ {html.escape(str(exc)[:400])}", kb.premium_kb())
     elif data.startswith("pre:"):
-        await safe_answer(query, "Premium checkout will be connected next.", show_alert=True)
+        plan = data.split(":")[1]
+        labels = {"30": "30 days", "90": "90 days", "life": "Lifetime"}
+        await safe_edit(
+            query,
+            f"⭐ Confirm <b>{labels.get(plan, plan)}</b> Premium. Payment is sent from your default ETH, BSC or SOL wallet.",
+            kb.confirm_kb(f"prex:{plan}", "nav:premium"),
+        )
     elif data == "cash:claim":
-        await safe_answer(query, "Nothing to claim yet.", show_alert=True)
+        moved = db.claim_cashback(uid)
+        if not moved:
+            await safe_answer(query, "Nothing to claim yet.", show_alert=True)
+            return
+        bits = ", ".join(f"{v} {k}" for k, v in moved.items())
+        await safe_edit(
+            query,
+            f"💸 Claimed <b>{html.escape(bits)}</b> as fee credit. Your next buy(s) skip protocol tax until that credit is used.",
+            kb.cashback_kb(),
+        )
     elif data.startswith("ref:"):
-        await safe_answer(query, "Link type saved for the next pass.")
+        kind = data.split(":")[1]
+        link_user = BOT_HANDLE.lstrip("@")
+        try:
+            link_user = (await context.bot.get_me()).username or link_user
+        except Exception:
+            pass
+        code = user.get("referral_code") or "------"
+        if kind == "quick":
+            url = f"https://t.me/{link_user}?start=qref_{code}"
+            label = "⚡ Quick-Buy Link — friends land on paste-CA trade"
+        else:
+            url = f"https://t.me/{link_user}?start=ref_{code}"
+            label = "🔗 Sticky Link — friends open the main menu"
+        await context.bot.send_message(uid, f"{label}\n<code>{url}</code>", parse_mode=HTML)
+        await safe_answer(query, "Link sent in chat")
     elif data.startswith("fnx:collect:"):
         chain = data.split(":")[2]
         res = await collect_native(uid, chain)
@@ -1201,8 +1312,9 @@ async def _dispatch_callback(update, context, query) -> None:
 
 async def _do_buy(query, uid, chain, ca, amt: Decimal):
     await safe_answer(query, "Submitting buy…")
+    multi = db.get_setting(uid, chain, "multi_buy", "1") in ("1", "true", "on")
     try:
-        res = await execute_buy(uid, chain, ca, amt, multi=True)
+        res = await execute_buy(uid, chain, ca, amt, multi=multi)
         db.add_monitor(uid, chain, ca)
         await safe_edit(
             query,
@@ -1308,8 +1420,25 @@ async def handle_token_cb(update, context, user, data, query):
     elif action == "slim":
         db.set_state(uid, "or_add", {"side": "sell", "chain": chain, "ca": ca})
         await safe_edit(query, "⚙️ Sell Limit — reply with <code>PRICE PERCENT</code>\nExample: <code>0.00001 50%</code>.", kb.back_main())
-    elif action in ("slip", "gas", "multi"):
-        await safe_answer(query, "Uses ⚙️ Global Settings for this chain.", show_alert=True)
+    elif action == "slip":
+        side = parts[3] if len(parts) > 3 else "buy"
+        key = "buy_slip" if side == "buy" else "sell_slip"
+        db.set_state(uid, "set_value", {"chain": chain, "key": key})
+        await safe_edit(query, f"💧 Reply with new {side} slippage % (example: 20).", kb.back_main())
+    elif action == "gas":
+        db.set_state(uid, "set_value", {"chain": chain, "key": "gas_delta"})
+        await safe_edit(query, "⛽ Reply with gas delta in gwei (example: 0.5).", kb.back_main())
+    elif action == "multi":
+        db.toggle_setting(uid, chain, "multi_buy", "1")
+        on = db.get_setting(uid, chain, "multi_buy", "1")
+        await safe_answer(query, "Multi-wallet ON" if on in ("1", "true", "on") else "Multi-wallet OFF — default wallet only", show_alert=True)
+    elif action == "approve":
+        await safe_answer(query, "Approving router…")
+        try:
+            res = await approve_token(uid, chain, ca)
+            await safe_edit(query, "✅ <b>Approve</b>\n" + "\n".join(res), kb.token_buy_kb(chain, ca))
+        except Exception as exc:
+            await safe_edit(query, f"❌ {html.escape(str(exc))}", kb.token_buy_kb(chain, ca))
     else:
         await safe_answer(query)
 
@@ -1343,9 +1472,24 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if text.startswith("/"):
         return
 
-    if is_contract(text) and state in (None, "await_ca", "token"):
-        chain = guess_chain(text, uid)
-        await show_token(update, user, chain, text, "buy", None)
+    ca = extract_ca(text)
+    if ca and state in (None, "await_ca", "token", "sig_wait"):
+        chain = guess_chain(ca, uid)
+        msg = update.effective_message
+        fwd = ""
+        if getattr(msg, "forward_from_chat", None):
+            fwd = (msg.forward_from_chat.username or str(msg.forward_from_chat.id) or "").lstrip("@")
+        await show_token(update, user, chain, ca, "buy", None)
+        if fwd:
+            tracked = {s["source"].lstrip("@").lower() for s in db.list_signals(uid)}
+            if fwd.lower() in tracked:
+                s = settings_map(uid, chain)
+                if s.get("auto_buy") == "1":
+                    try:
+                        res = await execute_buy(uid, chain, ca, Decimal(s.get("buy_amount") or "0.1"), multi=False)
+                        await send_panel(update, "📡 <b>Signal auto-buy</b>\n" + "\n".join(res))
+                    except Exception as exc:
+                        await send_panel(update, f"❌ Signal buy: {html.escape(str(exc)[:300])}")
         return
 
     if state == "wal_name_gen":
@@ -1427,6 +1571,12 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if state == "ct_amt":
         db.update_copytrade(int(payload["id"]), buy_amount=text.strip())
+        db.set_state(uid, None)
+        await show_copy(update, user, None)
+        return
+
+    if state == "ct_pct":
+        db.update_copytrade(int(payload["id"]), buy_pct=text.replace("%", "").strip())
         db.set_state(uid, None)
         await show_copy(update, user, None)
         return
@@ -1523,7 +1673,9 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 db.add_monitor(uid, chain, ca)
                 await send_panel(update, "🛒 Buy\n" + "\n".join(res), kb.token_buy_kb(chain, ca))
             elif action == "buyt":
-                await send_panel(update, "Buy X tokens: use Buy X native for exact spend. Token-out exact-in is routed as native spend from your Global buy amount.")
+                res = await execute_buy_tokens(uid, chain, ca, Decimal(text))
+                db.add_monitor(uid, chain, ca)
+                await send_panel(update, "🛒 Buy X tokens\n" + "\n".join(res), kb.token_buy_kb(chain, ca))
             elif action == "sellx":
                 res = await execute_sell(uid, chain, ca, None, float(text.replace("%", "")), multi=True)
                 await send_panel(update, "🔴 Sell %\n" + "\n".join(res), kb.token_sell_kb(chain, ca))
@@ -1531,7 +1683,8 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 res = await execute_sell(uid, chain, ca, Decimal(text), None, multi=True)
                 await send_panel(update, "🔴 Sell tokens\n" + "\n".join(res), kb.token_sell_kb(chain, ca))
             elif action == "selln":
-                await send_panel(update, "Sell X native: use Sell % for a reliable exit. Target-native sells vary with price impact.")
+                res = await execute_sell_for_native(uid, chain, ca, Decimal(text))
+                await send_panel(update, "🔴 Sell X native\n" + "\n".join(res), kb.token_sell_kb(chain, ca))
         except Exception as exc:
             await send_panel(update, f"❌ {html.escape(str(exc))}")
         return

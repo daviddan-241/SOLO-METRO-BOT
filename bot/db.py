@@ -141,11 +141,19 @@ def init_db() -> None:
             );
             """
         )
-        cols = {r[1] for r in con.execute("PRAGMA table_info(monitors)").fetchall()}
-        if "qty" not in cols:
-            con.execute("ALTER TABLE monitors ADD COLUMN qty TEXT")
-        if "cost" not in cols:
-            con.execute("ALTER TABLE monitors ADD COLUMN cost TEXT")
+        def _col(table: str, name: str, decl: str) -> None:
+            existing = {r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
+            if name not in existing:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+        _col("monitors", "qty", "TEXT")
+        _col("monitors", "cost", "TEXT")
+        _col("users", "premium_until", "REAL DEFAULT 0")
+        _col("users", "cashback", "TEXT DEFAULT '{}'")
+        _col("users", "cashback_lifetime", "TEXT DEFAULT '{}'")
+        _col("users", "fee_credit", "TEXT DEFAULT '{}'")
+        _col("wallets", "sort_order", "INTEGER DEFAULT 0")
+        _col("copytrade", "buy_pct", "TEXT")
 
 
 def ensure_user(user_id: int, username: str | None, first_name: str | None) -> dict:
@@ -252,10 +260,87 @@ def toggle_chain(user_id: int, chain: str) -> int:
 def list_wallets(user_id: int, chain: str) -> list[dict]:
     with connect() as con:
         rows = con.execute(
-            "SELECT * FROM wallets WHERE user_id=? AND chain=? ORDER BY id",
+            "SELECT * FROM wallets WHERE user_id=? AND chain=? ORDER BY sort_order, id",
             (user_id, chain),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def swap_wallet_order(user_id: int, chain: str, wallet_id: int, direction: int) -> None:
+    wallets = list_wallets(user_id, chain)
+    idx = next((i for i, w in enumerate(wallets) if w["id"] == wallet_id), None)
+    if idx is None:
+        return
+    j = idx + direction
+    if j < 0 or j >= len(wallets):
+        return
+    wallets[idx], wallets[j] = wallets[j], wallets[idx]
+    with connect() as con:
+        for i, w in enumerate(wallets):
+            con.execute("UPDATE wallets SET sort_order=? WHERE id=?", (i, w["id"]))
+
+
+def _json_map(raw: str | None) -> dict:
+    try:
+        data = json.loads(raw or "{}")
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def add_cashback(user_id: int, chain: str, amount: str) -> None:
+    user = get_user(user_id)
+    if not user:
+        return
+    cb = _json_map(user.get("cashback"))
+    life = _json_map(user.get("cashback_lifetime"))
+    from decimal import Decimal
+
+    add = Decimal(str(amount))
+    cb[chain] = str(Decimal(cb.get(chain) or "0") + add)
+    life[chain] = str(Decimal(life.get(chain) or "0") + add)
+    update_user(user_id, cashback=json.dumps(cb), cashback_lifetime=json.dumps(life))
+
+
+def claim_cashback(user_id: int) -> dict:
+    user = get_user(user_id)
+    if not user:
+        return {}
+    cb = _json_map(user.get("cashback"))
+    credit = _json_map(user.get("fee_credit"))
+    from decimal import Decimal
+
+    moved = {}
+    for chain, val in cb.items():
+        amt = Decimal(val or "0")
+        if amt <= 0:
+            continue
+        credit[chain] = str(Decimal(credit.get(chain) or "0") + amt)
+        moved[chain] = str(amt)
+    update_user(user_id, cashback="{}", fee_credit=json.dumps(credit))
+    return moved
+
+
+def take_fee_credit(user_id: int, chain: str, amount) -> bool:
+    """Consume fee credit. True if the protocol fee should be skipped."""
+    from decimal import Decimal
+
+    user = get_user(user_id)
+    if not user:
+        return False
+    credit = _json_map(user.get("fee_credit"))
+    have = Decimal(credit.get(chain) or "0")
+    need = Decimal(str(amount))
+    if have < need:
+        return False
+    credit[chain] = str(have - need)
+    update_user(user_id, fee_credit=json.dumps(credit))
+    return True
+
+
+def cashback_summary(user_id: int) -> tuple[dict, dict]:
+    user = get_user(user_id) or {}
+    return _json_map(user.get("cashback")), _json_map(user.get("cashback_lifetime"))
 
 
 def wallet_count(user_id: int, chain: str) -> int:

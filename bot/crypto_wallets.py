@@ -46,16 +46,27 @@ def generate_solana() -> tuple[str, str]:
     return address, pk
 
 
+def _crc16_ccitt(data: bytes) -> int:
+    crc = 0
+    for b in data:
+        crc ^= b << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
 def generate_ton_like() -> tuple[str, str]:
-    # Placeholder friendly address; TON v4r2 derivation is wired in the next pass.
-    raw = os.urandom(32)
-    address = "UQ" + base58.b58encode(raw)[:46].decode()
-    return address, raw.hex()
+    sk = SigningKey.generate()
+    pub = bytes(sk.verify_key)
+    payload = bytes([0x51, 0x00]) + pub  # non-bounceable, mainnet, workchain 0
+    crc = _crc16_ccitt(payload)
+    addr = base64.urlsafe_b64encode(payload + crc.to_bytes(2, "big")).decode().rstrip("=")
+    secret = base58.b58encode(bytes(sk) + pub).decode()
+    return addr, secret
 
 
 def generate_tron() -> tuple[str, str]:
     acct = Account.create()
-    # Tron address derivation (hex -> T-address) in the next pass; store EVM-compatible key.
     payload = bytes([0x41]) + bytes.fromhex(acct.address[2:])
     checksum = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
     address = base58.b58encode(payload + checksum).decode()

@@ -81,7 +81,13 @@ async def post_init(app: Application) -> None:
     log.info("%s commands registered", len(commands))
     from bot.worker import run as worker_run
 
-    asyncio.create_task(worker_run(app.bot))
+    async def _worker() -> None:
+        try:
+            await worker_run(app.bot)
+        except Exception:
+            log.exception("background worker crashed")
+
+    asyncio.create_task(_worker())
     log.info("background worker scheduled")
 
 
@@ -167,10 +173,16 @@ async def run_webhook(application: Application) -> None:
         return web.Response(text=f"{BOT_NAME} is running")
 
     async def handle(request: web.Request) -> web.Response:
-        payload = await request.json()
-        update = Update.de_json(payload, application.bot)
-        if update:
-            await application.process_update(update)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.Response(text="bad json", status=400)
+        try:
+            update = Update.de_json(payload, application.bot)
+            if update:
+                await application.process_update(update)
+        except Exception:
+            log.exception("webhook update")
         return web.Response(text="ok")
 
     app = web.Application()

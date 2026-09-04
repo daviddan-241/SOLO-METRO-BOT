@@ -111,6 +111,15 @@ async def _copy_evm(it: dict, bot) -> None:
     logs = w3.eth.get_logs(
         {"fromBlock": frm, "toBlock": latest, "topics": [transfer_topic, None, padded]}
     )
+    if it.get("copy_sell"):
+        try:
+            out_logs = w3.eth.get_logs(
+                {"fromBlock": frm, "toBlock": latest, "topics": [transfer_topic, padded, None]}
+            )
+        except Exception:
+            out_logs = []
+    else:
+        out_logs = []
     last = _copy_seen.get(it["id"], "")
     new_tokens = []
     for lg in logs:
@@ -122,26 +131,40 @@ async def _copy_evm(it: dict, bot) -> None:
         if key == last or key in _copy_seen.get(f"{it['id']}_set", set()) if False else False:
             continue
         new_tokens.append((token, txh))
-    if not new_tokens:
+    sells = []
+    for lg in out_logs:
+        txh = lg["transactionHash"].hex() if hasattr(lg["transactionHash"], "hex") else str(lg["transactionHash"])
+        token = lg["address"]
+        if token.lower() in (weth,):
+            continue
+        sells.append((token, txh))
+    if not new_tokens and not sells:
         return
-    token, txh = new_tokens[-1]
-    _copy_seen[it["id"]] = txh + token
     s = settings_of(it["user_id"], chain)
-    if not s["auto_buy"] and not it.get("enabled"):
-        return
     amt = Decimal(str(it.get("buy_amount") or s["buy_amount"] or "0.05"))
-    if it.get("enabled"):
-        res = await execute_buy(it["user_id"], chain, token, amt, multi=False)
+    if new_tokens:
+        token, txh = new_tokens[-1]
+        _copy_seen[it["id"]] = txh + token
+        if it.get("enabled"):
+            res = await execute_buy(it["user_id"], chain, token, amt, multi=False)
+            await notify(
+                bot,
+                it["user_id"],
+                f"👫 <b>Copytrade buy</b> {chain}\nTracked <code>{target}</code>\nToken <code>{token}</code>\n" + "\n".join(res),
+            )
+        else:
+            await notify(
+                bot,
+                it["user_id"],
+                f"👁 <b>Copytrade (track only)</b> {chain}\n<code>{target}</code> received <code>{token}</code>\nPaste the CA to open Token Report.",
+            )
+    if sells and it.get("copy_sell") and it.get("enabled"):
+        token, txh = sells[-1]
+        res = await execute_sell(it["user_id"], chain, token, None, 100, multi=False)
         await notify(
             bot,
             it["user_id"],
-            f"👫 <b>Copytrade buy</b> {chain}\nTracked <code>{target}</code>\nToken <code>{token}</code>\n" + "\n".join(res),
-        )
-    else:
-        await notify(
-            bot,
-            it["user_id"],
-            f"👁 <b>Copytrade (track only)</b> {chain}\n<code>{target}</code> received <code>{token}</code>\nPaste the CA to open Token Report.",
+            f"👫 <b>Copytrade sell</b> {chain}\n<code>{token}</code>\n" + "\n".join(res),
         )
 
 
