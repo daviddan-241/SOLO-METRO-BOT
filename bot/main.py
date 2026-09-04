@@ -62,6 +62,67 @@ logging.basicConfig(
     level=logging.INFO,
 )
 log = logging.getLogger("solo-metro")
+_STARTED = __import__("time").time()
+HEALTH_PATHS = ("/", "/health", "/ping", "/uptime", "/status")
+
+
+def _health_headers() -> dict:
+    return {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+        "X-Content-Type-Options": "nosniff",
+    }
+
+
+async def health_plain(request: web.Request) -> web.Response:
+    """UptimeRobot + Render: instant 200, no Telegram/RPC calls."""
+    body = f"{BOT_NAME} is running"
+    if request.method == "HEAD":
+        return web.Response(
+            status=200,
+            headers={**_health_headers(), "Content-Type": "text/plain; charset=utf-8", "Content-Length": str(len(body))},
+        )
+    if request.method == "OPTIONS":
+        return web.Response(status=204, headers=_health_headers())
+    return web.Response(
+        text=body,
+        status=200,
+        content_type="text/plain",
+        charset="utf-8",
+        headers=_health_headers(),
+    )
+
+
+async def health_json(_request: web.Request) -> web.Response:
+    import time
+
+    return web.json_response(
+        {
+            "ok": True,
+            "status": "running",
+            "bot": BOT_NAME,
+            "uptime_seconds": int(time.time() - _STARTED),
+        },
+        headers=_health_headers(),
+    )
+
+
+def mount_health(app: web.Application) -> None:
+    for path in HEALTH_PATHS:
+        app.router.add_get(path, health_plain)
+        app.router.add_head(path, health_plain)
+        app.router.add_options(path, health_plain)
+    app.router.add_get("/health.json", health_json)
+    app.router.add_get("/status.json", health_json)
+
+
+async def serve_http(app: web.Application) -> web.AppRunner:
+    runner = web.AppRunner(app, access_log=None)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    log.info("HTTP health on 0.0.0.0:%s  paths=%s", PORT, ",".join(HEALTH_PATHS))
+    return runner
 
 
 async def post_init(app: Application) -> None:
@@ -159,24 +220,17 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def run_webhook(application: Application) -> None:
     path = WEBHOOK_PATH if WEBHOOK_PATH.startswith("/") else f"/{WEBHOOK_PATH}"
     hook_url = f"{WEBHOOK_URL}{path}"
-
-    await application.initialize()
-    await application.start()
-    await application.bot.set_webhook(
-        url=hook_url,
-        allowed_updates=Update.ALL_UPDATES,
-        drop_pending_updates=True,
-    )
-    log.info("Webhook set to %s", hook_url)
-
-    async def health(_request: web.Request) -> web.Response:
-        return web.Response(text=f"{BOT_NAME} is running")
+    ready = asyncio.Event()
 
     async def handle(request: web.Request) -> web.Response:
         try:
             payload = await request.json()
         except Exception:
             return web.Response(text="bad json", status=400)
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=45)
+        except asyncio.TimeoutError:
+            return web.Response(text="starting", status=503)
         try:
             update = Update.de_json(payload, application.bot)
             if update:
@@ -185,20 +239,23 @@ async def run_webhook(application: Application) -> None:
             log.exception("webhook update")
         return web.Response(text="ok")
 
-    app = web.Application()
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
-    app.router.add_head("/", health)
-    app.router.add_post(path, handle)
+    # Bind health FIRST so Render + UptimeRobot get 200 while Telegram boots.
+    http_app = web.Application()
+    mount_health(http_app)
+    http_app.router.add_post(path, handle)
+    runner = await serve_http(http_app)
 
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    log.info("HTTP listening on 0.0.0.0:%s", PORT)
-
-    stop = asyncio.Event()
     try:
+        await application.initialize()
+        await application.start()
+        await application.bot.set_webhook(
+            url=hook_url,
+            allowed_updates=Update.ALL_UPDATES,
+            drop_pending_updates=True,
+        )
+        ready.set()
+        log.info("Webhook set to %s", hook_url)
+        stop = asyncio.Event()
         await stop.wait()
     finally:
         await application.stop()
@@ -207,31 +264,25 @@ async def run_webhook(application: Application) -> None:
 
 
 async def run_polling_with_health(application: Application) -> None:
-    """Bind 0.0.0.0:PORT so Render health checks pass while using long polling."""
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(
-        allowed_updates=Update.ALL_UPDATES, drop_pending_updates=True
-    )
-    log.info("Polling started")
+    """Bind 0.0.0.0:PORT so Render + UptimeRobot stay green while polling."""
+    http_app = web.Application()
+    mount_health(http_app)
+    runner = await serve_http(http_app)
 
-    async def health(_request: web.Request) -> web.Response:
-        return web.Response(text=f"{BOT_NAME} is running")
-
-    app = web.Application()
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
-    app.router.add_head("/", health)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    log.info("Health HTTP listening on 0.0.0.0:%s", PORT)
-    stop = asyncio.Event()
     try:
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(
+            allowed_updates=Update.ALL_UPDATES, drop_pending_updates=True
+        )
+        log.info("Polling started")
+        stop = asyncio.Event()
         await stop.wait()
     finally:
-        await application.updater.stop()
+        try:
+            await application.updater.stop()
+        except Exception:
+            pass
         await application.stop()
         await application.shutdown()
         await runner.cleanup()

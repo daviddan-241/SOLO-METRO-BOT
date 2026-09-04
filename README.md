@@ -28,12 +28,26 @@ This repo is a **Web Service** (`render.yaml`). Free instances must bind `0.0.0.
    - `BOT_NAME` = `Solo Metro`
    - `FEE_EVM_ADDRESS` / `FEE_SOL_ADDRESS` — optional 1% fee + Premium payout address
    - `ENCRYPTION_KEY` — optional Fernet key so wallet encryption survives redeploys
-5. Deploy. Open the Render URL — you should see `Solo Metro is running`.
+5. Deploy. Open `https://YOUR-SERVICE.onrender.com/health` — you must see `Solo Metro is running` (HTTP 200).
 6. Message the bot `/start`. Captcha → main menu.
 
-Render sets `PORT` and `RENDER_EXTERNAL_URL`. With `FORCE_POLLING=0` (default) the bot registers a Telegram **webhook** on that URL so a sleeping free dyno can wake on the next message. Set `FORCE_POLLING=1` if you prefer long-polling plus the health HTTP server.
+### Keep it awake with UptimeRobot (free)
 
-Free web dynos sleep after idle time. SQLite on the free disk is **ephemeral** — wallets reset on redeploy unless you add a persistent disk.
+Render free web **sleeps after ~15 minutes** with no traffic. UptimeRobot pings keep it up.
+
+1. [UptimeRobot](https://uptimerobot.com) → Add New Monitor
+2. Monitor Type: **HTTP(s)**
+3. URL: `https://YOUR-SERVICE.onrender.com/health`  
+   Also works: `/` `/ping` `/uptime` `/status` `/health.json`
+4. Interval: **5 minutes**
+5. Optional keyword monitor: keyword **`running`** (the body is `Solo Metro is running`)
+6. Alert When Down: your email
+
+HEAD and GET both return 200. Health answers immediately (no Telegram/RPC) so Render’s own health check and UptimeRobot never time out on a live dyno.
+
+Render sets `PORT` and `RENDER_EXTERNAL_URL`. With `FORCE_POLLING=0` (default) the bot registers a Telegram **webhook** on `/telegram`. Set `FORCE_POLLING=1` for long-polling plus the same health HTTP server.
+
+SQLite on the free disk is **ephemeral** — wallets reset on redeploy unless you add a persistent disk.
 
 ## Local
 
