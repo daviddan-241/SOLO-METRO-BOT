@@ -1,4 +1,4 @@
-# Solo Metro Bot
+# Deluge Bot
 
 Telegram trading bot UI matching the Maestro-style flow: captcha gate, command menu, chains, wallets, settings, copytrade, autosnipe, bridge, premium, cashback, referral, and Token Report on pasted CAs.
 
