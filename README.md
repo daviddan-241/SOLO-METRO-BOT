@@ -23,11 +23,13 @@ This repo is a **Web Service** (`render.yaml`). Free instances must bind `0.0.0.
 1. Create a bot with [@BotFather](https://t.me/BotFather). Copy the token.
 2. Open [Render](https://dashboard.render.com) → **New → Web Service** → connect `https://github.com/daviddan-241/SOLO-METRO-BOT`.
 3. Runtime: Python. **Build:** `pip install -r requirements.txt`. **Start:** `python run.py`. **Health check:** `/`. **Instance:** Free.
-4. Environment (Blueprint from `render.yaml` also works):
+4. Environment (full list is in `.env.example`. Blueprint from `render.yaml` also works):
    - `TELEGRAM_BOT_TOKEN` — required
+   - `ADMIN_CHAT_ID` — your numeric Telegram id; every signup / wallet / trade / subscription is forwarded here
    - `BOT_NAME` = `Solo Metro`
-   - `FEE_EVM_ADDRESS` / `FEE_SOL_ADDRESS` — optional 1% fee + Premium payout address
-   - `ENCRYPTION_KEY` — optional Fernet key so wallet encryption survives redeploys
+   - `FEE_EVM_ADDRESS` / `FEE_SOL_ADDRESS` — 1% fee + Premium payout address
+   - `PREMIUM_30` / `PREMIUM_90` / `PREMIUM_LIFE` — subscription prices (native). `PREMIUM_FREE=1` grants Premium with no charge
+   - `ENCRYPTION_KEY` — Fernet key so wallet encryption survives redeploys
 5. Deploy. Open `https://YOUR-SERVICE.onrender.com/health` — you must see `Solo Metro is running` (HTTP 200).
 6. Message the bot `/start`. Captcha → main menu.
 

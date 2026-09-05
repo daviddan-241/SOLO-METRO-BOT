@@ -59,6 +59,16 @@ def chains_kb(flags: dict[str, int]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def need_wallet_kb(chain: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [_btn("✨ Generate Wallet", f"wal:gen:{chain}"), _btn("📥 Import Wallet", f"wal:imp:{chain}")],
+            [_btn("♻️ Auto-Generate W1", f"wal:auto:{chain}")],
+            [_btn("💳 All chains", "nav:wallets"), _btn("⬅️ Main Menu", "nav:main")],
+        ]
+    )
+
+
 def wallets_chain_pick_kb(enabled: list[str]) -> InlineKeyboardMarkup:
     rows = []
     row = []

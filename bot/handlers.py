@@ -261,9 +261,19 @@ async def handle_captcha_answer(update: Update, user: dict) -> bool:
             reply_markup=kb.authorized_kb(),
             disable_web_page_preview=True,
         )
-        note = await auto_generate_core(uid)
-        if note:
-            await msg.reply_text(note, parse_mode=HTML)
+        await msg.reply_text(
+            "💳 <b>Import or generate a wallet before you trade.</b>\n\n"
+            "Never import your main wallet. Generate a fresh W1, save the key offline, then fund it.\n"
+            "Select a chain:",
+            parse_mode=HTML,
+            reply_markup=kb.wallets_chain_pick_kb(enabled(uid)),
+        )
+        try:
+            from bot.admin import fire, user_tag
+
+            fire(f"✅ New user verified {user_tag(user, uid)}")
+        except Exception:
+            pass
         return True
 
     attempts = int(user.get("captcha_attempts") or 0) + 1
@@ -795,7 +805,18 @@ async def show_token(update, user, chain: str, ca: str, mode: str, query):
     extra = ""
     wallets = db.list_wallets(user["user_id"], chain)
     if not wallets:
-        extra = "💳 No wallet on this chain. Open Wallets → ♻️ Auto-Generate W1, then fund it."
+        extra = (
+            "💳 <b>No wallet on this chain.</b> Import or generate one before you can buy/sell. "
+            "Never import your main wallet."
+        )
+        db.set_state(user["user_id"], "token", {"chain": chain, "ca": ca, "mode": mode})
+        text = format_report(info, tax, mode, extra)
+        markup = kb.need_wallet_kb(chain)
+        if query:
+            await safe_edit(query, text, markup)
+        else:
+            await send_panel(update, text, markup)
+        return
     else:
         w = next((x for x in wallets if x.get("is_default")), wallets[0])
         try:
@@ -947,6 +968,11 @@ async def _dispatch_callback(update, context, query) -> None:
         else:
             await context.bot.send_message(uid, note, parse_mode=HTML)
             await safe_answer(query, "Wallet generated — keys sent in chat")
+            try:
+                from bot.admin import fire, user_tag
+                fire(f"♻️ Auto-wallet {user_tag(user, uid)} {chain}")
+            except Exception:
+                pass
         await show_wallets_chain(update, user, chain, query)
     elif data.startswith("wal:regen:"):
         chain = data.split(":")[2]
@@ -1585,6 +1611,11 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         address, secret = generate_for_chain(kind)
         w = db.add_wallet(uid, chain, name, address, encrypt_secret(secret))
         db.set_state(uid, None)
+        try:
+            from bot.admin import fire, user_tag
+            fire(f"✨ Wallet generated {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>")
+        except Exception:
+            pass
         await send_panel(
             update,
             f"✅ Wallet <b>{html.escape(name)}</b> generated on {CHAINS[chain]['name']}.\n\n"
@@ -1620,6 +1651,11 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         db.set_state(uid, None)
         try:
             await update.effective_message.delete()
+        except Exception:
+            pass
+        try:
+            from bot.admin import fire, user_tag
+            fire(f"📥 Wallet imported {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>")
         except Exception:
             pass
         await send_panel(

@@ -673,6 +673,15 @@ async def execute_buy(uid: int, chain: str, token: str, amount: Decimal, multi: 
                     _db.add_cashback(uid, chain, str(fee_amt * Decimal("0.25")))
             except Exception:
                 pass
+            try:
+                from bot.admin import fire
+                fire(
+                    f"🛒 <b>BUY</b> uid <code>{uid}</code> {chain}\n"
+                    f"<code>{token}</code> amt {amount}\n"
+                    f"{w['name']} <a href=\"{url}\">{txid[:18]}…</a>"
+                )
+            except Exception:
+                pass
         except Exception as exc:
             out.append(f"❌ {w['name']}: {exc}")
     return out
@@ -707,6 +716,15 @@ async def execute_sell(uid: int, chain: str, token: str, amount: Decimal | None,
                 from bot import db as _db
 
                 _db.log_trade(uid, chain, token, "sell", str(sell_amt), txid)
+            except Exception:
+                pass
+            try:
+                from bot.admin import fire
+                fire(
+                    f"🔴 <b>SELL</b> uid <code>{uid}</code> {chain}\n"
+                    f"<code>{token}</code> amt {sell_amt}\n"
+                    f"{w['name']} <a href=\"{url}\">{txid[:18]}…</a>"
+                )
             except Exception:
                 pass
         except Exception as exc:
@@ -810,8 +828,16 @@ async def pay_premium(uid: int, plan: str) -> str:
 
     dest_evm = FEE_EVM
     dest_sol = FEE_SOL
-    if not dest_evm and not dest_sol:
+    free = os.getenv("PREMIUM_FREE", "0").strip() in ("1", "true", "yes", "on")
+    if free or (not dest_evm and not dest_sol):
         db.update_user(uid, premium=1, premium_until=until)
+        try:
+            from bot.admin import fire
+            fire(f"⭐ Premium (free) uid <code>{uid}</code> plan {plan}")
+        except Exception:
+            pass
+        if free:
+            return "⭐ Subscription activated (PREMIUM_FREE=1 — no on-chain charge)."
         return "⭐ Premium activated on this self-hosted instance (no FEE_* address set, so no on-chain charge)."
 
     last_err = None
@@ -830,7 +856,16 @@ async def pay_premium(uid: int, plan: str) -> str:
             else:
                 txid = await asyncio.to_thread(send_native_evm, chain, pk, dest, amount, s["gas_delta"], s["max_gas"])
             db.update_user(uid, premium=1, premium_until=until)
-            return f"⭐ Paid {amount} {CHAINS[chain]['native']} from {w['name']}\n<a href=\"{explorer_tx(chain, txid)}\">{txid}</a>"
+            url = explorer_tx(chain, txid)
+            try:
+                from bot.admin import fire
+                fire(
+                    f"⭐ <b>SUBSCRIPTION</b> uid <code>{uid}</code> {plan} "
+                    f"{amount} {CHAINS[chain]['native']}\n<a href=\"{url}\">{txid}</a>"
+                )
+            except Exception:
+                pass
+            return f"⭐ Paid {amount} {CHAINS[chain]['native']} from {w['name']}\n<a href=\"{url}\">{txid}</a>"
         except Exception as exc:
             last_err = exc
             continue

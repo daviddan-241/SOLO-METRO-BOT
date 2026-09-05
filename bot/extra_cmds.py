@@ -439,7 +439,7 @@ def register_command_handlers(application: Application) -> None:
         (["relay"], h.cmd_relay),
         (["debridge"], h.cmd_debridge),
         (["arc"], h.cmd_arc),
-        (["premium"], h.cmd_premium),
+        (["premium", "subscribe", "subscription"], h.cmd_premium),
         (["collect"], h.cmd_collect),
         (["disperse"], h.cmd_disperse),
         (["cashback", "rewards"], h.cmd_cashback),

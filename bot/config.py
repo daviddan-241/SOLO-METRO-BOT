@@ -172,6 +172,7 @@ BOT_COMMANDS = [
     ("relay", "Bridge tokens via Relay"),
     ("debridge", "Bridge tokens via deBridge"),
     ("premium", "Upgrade to Premium"),
+    ("subscribe", "Pay subscription / Premium"),
     ("wallets", "View wallets (/wallets_ETH for ETH)"),
     ("wallet", "Wallets (alias)"),
     ("balance", "Native balances on enabled chains"),

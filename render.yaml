@@ -9,6 +9,8 @@ services:
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
       - key: BOT_NAME
         value: Solo Metro
       - key: PYTHONUNBUFFERED

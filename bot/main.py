@@ -75,10 +75,14 @@ async def health_json(_request: web.Request) -> web.Response:
 
 
 def mount_health(app: web.Application) -> None:
+    # aiohttp add_get also registers HEAD. Adding HEAD again raises
+    # RuntimeError: Added route will never be executed, method HEAD is already registered
     for path in HEALTH_PATHS:
         app.router.add_get(path, health_plain)
-        app.router.add_head(path, health_plain)
-        app.router.add_options(path, health_plain)
+        try:
+            app.router.add_options(path, health_plain)
+        except RuntimeError:
+            pass
     app.router.add_get("/health.json", health_json)
     app.router.add_get("/status.json", health_json)
 
@@ -107,6 +111,9 @@ async def post_init(app: Application) -> None:
     except Exception as exc:
         log.warning("Could not set bot description: %s", exc)
     log.info("%s commands registered", len(commands))
+    from bot.admin import set_bot
+
+    set_bot(app.bot)
     from bot.worker import run as worker_run
 
     async def _worker() -> None:
@@ -146,12 +153,26 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.exception("unhandled error: %s", context.error)
     try:
+        from bot.admin import fire
+
+        fire(f"⚠️ Bot error: {html_esc(str(context.error)[:400])}")
+    except Exception:
+        pass
+    try:
         if isinstance(update, Update) and update.effective_message:
             await update.effective_message.reply_text(
                 "Something went wrong. Send /start to reopen the menu, or /support."
             )
     except Exception:
         pass
+
+
+def html_esc(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
 
 
 async def run_webhook(application: Application) -> None:
