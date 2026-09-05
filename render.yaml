@@ -29,9 +29,7 @@ services:
         sync: false
       - key: ENCRYPTION_KEY
         sync: false
-      - key: PREMIUM_30
-        value: "0.03"
-      - key: PREMIUM_90
-        value: "0.08"
-      - key: PREMIUM_LIFE
-        value: "0.20"
+      - key: PREMIUM_USD
+        value: "200"
+      - key: PREMIUM_DAYS
+        value: "30"

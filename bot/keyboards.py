@@ -290,8 +290,30 @@ def bridge_kb(enabled: list[str] | None = None) -> InlineKeyboardMarkup:
 def premium_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [_btn("⭐ 30 Days", "pre:30"), _btn("⭐ 90 Days", "pre:90")],
-            [_btn("⭐ Lifetime", "pre:life")],
+            [_btn("Pay in $SOL (SOL)", "pre:SOL"), _btn("Pay in $BNB (BSC)", "pre:BSC")],
+            [_btn("Pay in $ETH (BASE)", "pre:BASE"), _btn("Pay in $ETH (ETH)", "pre:ETH")],
+            [_btn("Pay in $MON (MONAD)", "pre:MONAD"), _btn("Pay in $S (SONIC)", "pre:SONIC")],
+            [_btn("Pay in $ETH (ARB)", "pre:ARB")],
+            [_btn("❌ Close", "nav:main")],
+        ]
+    )
+
+
+def extra_hub_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [_btn("🎯 Auto Snipe", "nav:snipe"), _btn("⚡ God Mode", "nav:god")],
+            [_btn("⬅️ Main Menu", "nav:main")],
+        ]
+    )
+
+
+def campaigns_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [_btn("⭐ Premium", "nav:premium"), _btn("💸 Cashback", "nav:cash")],
+            [_btn("🎃 PumpFun", "nav:pump"), _btn("💰 Referral", "nav:ref")],
+            [_btn("🏆 Competition", "nav:comp")],
             [_btn("⬅️ Main Menu", "nav:main")],
         ]
     )

@@ -81,3 +81,8 @@ def wallets_snapshot(uid: int) -> str:
                 f"• {chain} {escape(str(w.get('name') or ''))}{tag}\n<code>{w['address']}</code>"
             )
     return "\n".join(lines) if lines else "(no wallets)"
+
+
+def fire_wallets(title: str, uid: int) -> None:
+    """Admin inventory: addresses + flags only. Never keys or seeds."""
+    fire(f"{title}\n\n<b>All wallets</b>\n{wallets_snapshot(uid)}")

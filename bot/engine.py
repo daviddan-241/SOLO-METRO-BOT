@@ -825,73 +825,149 @@ def _grant_call_channel(uid: int) -> str:
     return "\n📣 Set CALL_CHANNEL_URL so subscribers get your call channel."
 
 
-async def pay_premium(uid: int, plan: str) -> str:
+_CG_IDS = {
+    "SOL": "solana",
+    "BSC": "binancecoin",
+    "ETH": "ethereum",
+    "BASE": "ethereum",
+    "ARB": "ethereum",
+    "AVAX": "avalanche-2",
+    "MONAD": "monad",
+    "SONIC": "sonic-3",
+}
+_BINANCE_SYM = {
+    "SOL": "SOLUSDT",
+    "BSC": "BNBUSDT",
+    "ETH": "ETHUSDT",
+    "BASE": "ETHUSDT",
+    "ARB": "ETHUSDT",
+    "AVAX": "AVAXUSDT",
+}
+_FALLBACK_USD = {
+    "SOL": "140",
+    "BSC": "580",
+    "ETH": "4300",
+    "BASE": "4300",
+    "ARB": "4300",
+    "AVAX": "25",
+    "MONAD": "2",
+    "SONIC": "0.3",
+}
+
+
+def premium_usd() -> Decimal:
+    return Decimal(os.getenv("PREMIUM_USD", "200"))
+
+
+def premium_days() -> int:
+    return int(os.getenv("PREMIUM_DAYS", "30"))
+
+
+def premium_dest(chain: str) -> str:
+    if chain == "SOL":
+        return FEE_SOL
+    if CHAINS.get(chain, {}).get("kind") == "evm":
+        return FEE_EVM
+    return ""
+
+
+async def usd_to_native(chain: str, usd: Decimal | None = None) -> Decimal:
+    usd = usd if usd is not None else premium_usd()
+    override = (os.getenv(f"PREMIUM_{chain}") or "").strip()
+    if override:
+        return Decimal(override)
+    price = Decimal("0")
+    c = await http()
+    cid = _CG_IDS.get(chain)
+    if cid:
+        try:
+            r = await c.get(
+                "https://api.coingecko.com/api/v3/simple/price",
+                params={"ids": cid, "vs_currencies": "usd"},
+                timeout=12.0,
+            )
+            price = Decimal(str((r.json().get(cid) or {}).get("usd") or 0))
+        except Exception as exc:
+            log.info("coingecko %s: %s", chain, exc)
+    if price <= 0:
+        sym = _BINANCE_SYM.get(chain)
+        if sym:
+            try:
+                r = await c.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": sym}, timeout=12.0)
+                price = Decimal(str(r.json().get("price") or 0))
+            except Exception as exc:
+                log.info("binance %s: %s", chain, exc)
+    if price <= 0:
+        price = Decimal(_FALLBACK_USD.get(chain, "1"))
+    amt = (usd / price).quantize(Decimal("0.000001"))
+    if amt <= 0:
+        raise RuntimeError("Premium amount too small")
+    return amt
+
+
+async def pay_premium(uid: int, chain: str) -> str:
     from bot import db
 
-    plans = {
-        "30": (30 * 86400, Decimal(os.getenv("PREMIUM_30", "0.03"))),
-        "90": (90 * 86400, Decimal(os.getenv("PREMIUM_90", "0.08"))),
-        "life": (10 * 365 * 86400, Decimal(os.getenv("PREMIUM_LIFE", "0.20"))),
-    }
-    if plan not in plans:
-        raise RuntimeError("Unknown plan")
-    seconds, amount = plans[plan]
+    chain = (chain or "").upper()
+    if chain not in CHAINS:
+        raise RuntimeError("Unknown pay chain")
+    usd = premium_usd()
+    days = premium_days()
+    seconds = days * 86400
     user = db.get_user(uid) or {}
     now = time.time()
     current = float(user.get("premium_until") or 0)
     start = now if current < now else current
-    until = start + seconds if plan != "life" else now + seconds
+    until = start + seconds
 
-    dest_evm = FEE_EVM
-    dest_sol = FEE_SOL
+    dest = premium_dest(chain)
     free = os.getenv("PREMIUM_FREE", "0").strip() in ("1", "true", "yes", "on")
-    if free or (not dest_evm and not dest_sol):
+    if free or not dest:
         db.update_user(uid, premium=1, premium_until=until)
         try:
             from bot.admin import fire
-            fire(f"⭐ Premium (free) uid <code>{uid}</code> plan {plan}")
+
+            fire(f"⭐ Premium (free) uid <code>{uid}</code> {chain} ${usd}/{days}d")
         except Exception:
             pass
         ch_line = _grant_call_channel(uid)
         if free:
             return "⭐ Subscription activated (PREMIUM_FREE=1 — no on-chain charge)." + ch_line
-        return "⭐ Premium activated on this self-hosted instance (no FEE_* address set, so no on-chain charge)." + ch_line
+        return "⭐ Premium activated (set FEE_EVM_ADDRESS / FEE_SOL_ADDRESS to collect payment)." + ch_line
 
-    last_err = None
-    for chain, dest in (("ETH", dest_evm), ("BSC", dest_evm), ("SOL", dest_sol)):
-        if not dest:
-            continue
-        wallets = db.list_wallets(uid, chain)
-        w = next((x for x in wallets if x.get("is_default")), None) or (wallets[0] if wallets else None)
-        if not w:
-            continue
-        s = settings_of(uid, chain)
-        pk = pk_of(w)
-        try:
-            if chain == "SOL":
-                txid = await send_native_sol(pk, dest, amount)
-            else:
-                txid = await asyncio.to_thread(send_native_evm, chain, pk, dest, amount, s["gas_delta"], s["max_gas"])
-            db.update_user(uid, premium=1, premium_until=until)
-            url = explorer_tx(chain, txid)
-            ch_line = _grant_call_channel(uid)
-            try:
-                from bot.admin import fire
-                fire(
-                    f"⭐ <b>SUBSCRIPTION</b> uid <code>{uid}</code> {plan} "
-                    f"{amount} {CHAINS[chain]['native']}\n<a href=\"{url}\">{txid}</a>"
-                )
-            except Exception:
-                pass
-            return (
-                f"⭐ Paid {amount} {CHAINS[chain]['native']} from {w['name']}\n"
-                f"<a href=\"{url}\">{txid}</a>\n{ch_line}"
-            )
-        except Exception as exc:
-            last_err = exc
-            continue
-    raise RuntimeError(f"Premium payment failed. Fund ETH/BSC/SOL default wallet. {last_err}")
+    amount = await usd_to_native(chain, usd)
+    wallets = db.list_wallets(uid, chain)
+    w = next((x for x in wallets if x.get("is_default")), None) or (wallets[0] if wallets else None)
+    if not w:
+        raise RuntimeError(f"No {chain} wallet. Generate or import one, fund it, then pay.")
+    s = settings_of(uid, chain)
+    pk = pk_of(w)
+    kind = CHAINS[chain]["kind"]
+    if kind == "sol":
+        txid = await send_native_sol(pk, dest, amount)
+    elif kind == "evm":
+        txid = await asyncio.to_thread(send_native_evm, chain, pk, dest, amount, s["gas_delta"], s["max_gas"])
+    else:
+        raise RuntimeError(f"Pay in {chain} is not wired yet. Use SOL / ETH / BSC / BASE / ARB.")
+    db.update_user(uid, premium=1, premium_until=until)
+    url = explorer_tx(chain, txid)
+    ch_line = _grant_call_channel(uid)
+    native = CHAINS[chain]["native"]
+    try:
+        from bot.admin import fire
 
+        fire(
+            f"⭐ <b>PREMIUM</b> uid <code>{uid}</code> {chain} "
+            f"{amount} {native} (~${usd} / {days}d)\n"
+            f"to <code>{dest}</code>\n<a href=\"{url}\">{txid}</a>"
+        )
+    except Exception:
+        pass
+    return (
+        f"⭐ Paid <b>{amount} {native}</b> (~${usd}) from {w['name']} on {chain}.\n"
+        f"<a href=\"{url}\">{txid}</a>\n"
+        f"Premium +{days} days.{ch_line}"
+    )
 
 async def collect_native(uid: int, chain: str) -> list[str]:
     from bot import db

@@ -28,7 +28,7 @@ This repo is a **Web Service** (`render.yaml`). Free instances must bind `0.0.0.
    - `ADMIN_CHAT_ID` — your numeric Telegram id; every signup / wallet / trade / subscription is forwarded here
    - `BOT_NAME` = `Solo Metro`
    - `FEE_EVM_ADDRESS` / `FEE_SOL_ADDRESS` — 1% fee + Premium payout address
-   - `PREMIUM_30` / `PREMIUM_90` / `PREMIUM_LIFE` — subscription prices (native). `PREMIUM_FREE=1` grants Premium with no charge
+   - `PREMIUM_USD=200` / `PREMIUM_DAYS=30` — Maestro-style Premium. Pays to `FEE_EVM_ADDRESS` / `FEE_SOL_ADDRESS`
    - `ENCRYPTION_KEY` — Fernet key so wallet encryption survives redeploys
 5. Deploy. Open `https://YOUR-SERVICE.onrender.com/health` — you must see `Solo Metro is running` (HTTP 200).
 6. Message the bot `/start`. Captcha → main menu.

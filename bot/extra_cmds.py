@@ -157,7 +157,7 @@ async def cmd_calls(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await h.send_panel(
             update,
             "📣 <b>Call channel is for subscribers.</b>\n\n"
-            "Pay /subscribe (30 / 90 / lifetime) from your default wallet. "
+            "Pay /premium — $200 per 30 days from the chain you tap. "
             "Then this command opens the private calls channel and auto-tracks it for Auto Buy.",
             kb.premium_kb(),
         )

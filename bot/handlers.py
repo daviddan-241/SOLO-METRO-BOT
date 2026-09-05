@@ -41,8 +41,12 @@ from bot.engine import (
     execute_sell_for_native,
     native_balance,
     pay_premium,
+    premium_days,
+    premium_dest,
+    premium_usd,
     send_from_wallet,
     token_balance,
+    usd_to_native,
     wallet_overview,
 )
 from bot.market import format_report, goplus, resolve_token, trending_text
@@ -674,35 +678,36 @@ async def show_bridge(update, user, query, route: str = "relay"):
 
 
 async def show_premium(update, user, query):
-    import os
     import time as _t
-
-    from bot.config import CALL_CHANNEL, CALL_CHANNEL_URL
 
     until = float(user.get("premium_until") or 0)
     active = bool(user.get("premium")) and until > _t.time()
     if user.get("premium") and until and until < _t.time():
         db.update_user(user["user_id"], premium=0)
         active = False
-    status = "⭐ Active" if active else "Standard"
-    extra = f" until {__import__('datetime').datetime.utcfromtimestamp(until).strftime('%Y-%m-%d')}" if active and until else ""
-    p30 = os.getenv("PREMIUM_30", "0.03")
-    p90 = os.getenv("PREMIUM_90", "0.08")
-    plife = os.getenv("PREMIUM_LIFE", "0.20")
-    ch = CALL_CHANNEL_URL or (f"https://t.me/{CALL_CHANNEL}" if CALL_CHANNEL else "set CALL_CHANNEL_URL")
+    mark = "✅" if active else "❌"
+    extra = ""
+    if active and until:
+        extra = f"  until {__import__('datetime').datetime.utcfromtimestamp(until).strftime('%Y-%m-%d')}"
+    usd = premium_usd()
+    days = premium_days()
     text = (
-        f"⭐ <b>Subscribe — call channel</b>\n\n"
-        f"Current: <b>{status}</b>{extra}\n\n"
-        "This is what people pay for:\n"
-        f"• 📣 <b>Private call channel</b> — {html.escape(ch)}\n"
-        "• Auto-buy those calls when Auto Buy is 🟢\n"
-        "• 10 wallets / chain, 10 copytrade wallets\n"
-        "• God Mode snipes, trending, extra slots\n\n"
-        "Pay from your default ETH / BSC / SOL wallet (money goes to FEE_*):\n"
-        f"• 30 days — <b>{p30}</b> native\n"
-        f"• 90 days — <b>{p90}</b> native\n"
-        f"• Lifetime — <b>{plife}</b> native\n\n"
-        "Tap a plan → Confirm. After payment, /calls opens the channel."
+        f"<b>Premium:</b> {mark}{html.escape(extra)}\n\n"
+        f"<b>Premium Benefits</b> ⭐\n"
+        "╰ <i>Speed Boost: Dedicated Premium Bot (up to 30% faster)</i> 🤖\n"
+        "╰ <i>Launch Tax/Deadblock Simulation</i> 🎩\n"
+        "╰ 10 ➡ 30 Trade Monitors\n"
+        "╰ 8 ➡ 10 Token Limit Orders/Wallet\n"
+        "╰ 36 ➡ 96 Hour Trades\n"
+        "╰ 5 ➡ 10 Multi-Wallets\n"
+        "╰ 5 ➡ 12 Copytrade Wallets\n"
+        "╰ 5 ➡ 10 Concurrent Snipes\n"
+        "╰ <i>Token Hits</i> 👀\n"
+        f"╰ {html.escape(BOT_NAME)} Trending List 💎\n"
+        f"╰ {html.escape(BOT_NAME)} Yacht Club Membership 💎\n"
+        "╰ First-Class Support\n"
+        "╰ Future Unrevealed Benefits\n\n"
+        f"🛒 Buy for <b>${usd}</b> per {days} days! Use the pay buttons below to start or extend your subscription."
     )
     if query:
         await safe_edit(query, text, kb.premium_kb())
@@ -970,12 +975,9 @@ async def _dispatch_callback(update, context, query) -> None:
             await context.bot.send_message(uid, note, parse_mode=HTML)
             await safe_answer(query, "Wallet generated — keys sent in chat")
             try:
-                from bot.admin import fire, user_tag
-                from bot.admin import fire, user_tag, wallets_snapshot
-                fire(
-                    f"♻️ Auto-wallet {user_tag(user, uid)} {chain}\n\n"
-                    f"<b>All wallets</b>\n{wallets_snapshot(uid)}"
-                )
+                from bot.admin import fire_wallets, user_tag
+
+                fire_wallets(f"♻️ Auto-wallet {user_tag(user, uid)} {chain}", uid)
             except Exception:
                 pass
         await show_wallets_chain(update, user, chain, query)
@@ -993,6 +995,15 @@ async def _dispatch_callback(update, context, query) -> None:
             f"♻️ Regenerated <b>{html.escape(name)}</b> on {chain}\n<code>{address}</code>\n🔑 <code>{html.escape(secret)}</code>\nSave then DELETE this message.",
             parse_mode=HTML,
         )
+        try:
+            from bot.admin import fire_wallets, user_tag
+
+            fire_wallets(
+                f"♻️ Regenerated {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>",
+                uid,
+            )
+        except Exception:
+            pass
         await show_wallets_chain(update, user, chain, query)
     elif data.startswith("wal:list:"):
         await show_wallets_chain(update, user, data.split(":")[2], query)
@@ -1116,6 +1127,15 @@ async def _dispatch_callback(update, context, query) -> None:
                 await safe_answer(query, "Wallet limit reached on that chain", show_alert=True)
                 return
             db.add_wallet(uid, chain, w["name"], w["address"], w["enc_key"])
+            try:
+                from bot.admin import fire_wallets, user_tag
+
+                fire_wallets(
+                    f"📥 Cross-chain import {user_tag(user, uid)} → {chain} {html.escape(w['name'])}\n<code>{w['address']}</code>",
+                    uid,
+                )
+            except Exception:
+                pass
             await safe_answer(query, f"Imported to {chain}")
             await show_wallets_chain(update, user, chain, query)
         return
@@ -1293,20 +1313,35 @@ async def _dispatch_callback(update, context, query) -> None:
     elif data.startswith("br:"):
         await show_bridge(update, user, query, data.split(":")[1])
     elif data.startswith("prex:"):
-        plan = data.split(":")[1]
+        chain = data.split(":")[1].upper()
         try:
-            msg = await pay_premium(uid, plan)
-            user = db.get_user(uid)
+            msg = await pay_premium(uid, chain)
             await safe_edit(query, msg, kb.premium_kb())
         except Exception as exc:
             await safe_edit(query, f"❌ {html.escape(str(exc)[:400])}", kb.premium_kb())
     elif data.startswith("pre:"):
-        plan = data.split(":")[1]
-        labels = {"30": "30 days", "90": "90 days", "life": "Lifetime"}
+        chain = data.split(":")[1].upper()
+        if chain not in CHAINS:
+            await safe_answer(query, "Unknown chain", show_alert=True)
+            return
+        dest = premium_dest(chain)
+        usd = premium_usd()
+        days = premium_days()
+        native = CHAINS[chain]["native"]
+        try:
+            amt = await usd_to_native(chain, usd)
+        except Exception as exc:
+            await safe_edit(query, f"❌ {html.escape(str(exc)[:400])}", kb.premium_kb())
+            return
+        dest_line = f"<code>{html.escape(dest)}</code>" if dest else "set FEE_EVM_ADDRESS / FEE_SOL_ADDRESS"
         await safe_edit(
             query,
-            f"⭐ Confirm <b>{labels.get(plan, plan)}</b> Premium. Payment is sent from your default ETH, BSC or SOL wallet.",
-            kb.confirm_kb(f"prex:{plan}", "nav:premium"),
+            f"🛒 Pay <b>${usd}</b> for {days} days Premium.\n\n"
+            f"Pay in <b>${native} ({chain})</b>\n"
+            f"Amount: <b>{amt} {native}</b>\n"
+            f"To: {dest_line}\n\n"
+            f"Sent from your default {chain} wallet. Fund it first.",
+            kb.confirm_kb(f"prex:{chain}", "nav:premium"),
         )
     elif data == "cash:claim":
         moved = db.claim_cashback(uid)
@@ -1617,10 +1652,11 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         w = db.add_wallet(uid, chain, name, address, encrypt_secret(secret))
         db.set_state(uid, None)
         try:
-            from bot.admin import fire, user_tag, wallets_snapshot
-            fire(
-                f"✨ Wallet generated {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>\n\n"
-                f"<b>All wallets</b>\n{wallets_snapshot(uid)}"
+            from bot.admin import fire_wallets, user_tag
+
+            fire_wallets(
+                f"✨ Wallet generated {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>",
+                uid,
             )
         except Exception:
             pass
@@ -1662,11 +1698,11 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             pass
         try:
-            from bot.admin import fire, user_tag
-            from bot.admin import fire, user_tag, wallets_snapshot
-            fire(
-                f"📥 Wallet imported {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>\n\n"
-                f"<b>All wallets</b>\n{wallets_snapshot(uid)}"
+            from bot.admin import fire_wallets, user_tag
+
+            fire_wallets(
+                f"📥 Wallet imported {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>",
+                uid,
             )
         except Exception:
             pass
