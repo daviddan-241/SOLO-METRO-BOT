@@ -11,6 +11,10 @@ services:
         sync: false
       - key: ADMIN_CHAT_ID
         sync: false
+      - key: CALL_CHANNEL
+        sync: false
+      - key: CALL_CHANNEL_URL
+        sync: false
       - key: BOT_NAME
         value: Solo Metro
       - key: PYTHONUNBUFFERED
