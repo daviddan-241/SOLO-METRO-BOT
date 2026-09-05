@@ -243,22 +243,21 @@ async def handle_captcha_answer(update: Update, user: dict) -> bool:
         return True
 
     msg = update.effective_message
-    if not msg.reply_to_message:
-        await msg.reply_text(
-            "Please <b>reply</b> to the welcome message with the text shown in the image.",
-            parse_mode=HTML,
-        )
-        return True
-
-    guess = (msg.text or "").strip()
-    expected = user.get("captcha_text") or ""
-    if guess == expected and expected:
+    guess = re.sub(r"[^A-Za-z0-9]", "", (msg.text or "").strip())
+    expected = (user.get("captcha_text") or "").strip()
+    if guess and expected and guess.lower() == expected.lower():
         db.update_user(uid, verified=1, captcha_text=None, captcha_attempts=0, captcha_lock_until=0, tos_accepted=1)
         db.set_state(uid, None)
         await msg.reply_text(
             texts.authorized(lang_of(user)),
             parse_mode=HTML,
             reply_markup=kb.authorized_kb(),
+            disable_web_page_preview=True,
+        )
+        await msg.reply_text(
+            texts.main_menu(lang_of(user)),
+            parse_mode=HTML,
+            reply_markup=kb.main_menu_kb(lang_of(user)),
             disable_web_page_preview=True,
         )
         await msg.reply_text(

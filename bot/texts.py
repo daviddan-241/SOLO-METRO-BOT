@@ -21,16 +21,16 @@ def captcha_caption(lang: str) -> str:
     return t(
         lang,
         f"⭐ Welcome to {BOT_NAME}, the one-stop solution for all your trading needs!\n\n"
-        "Before you can access the bot, please reply to this message with the text shown in the image.",
+        "Before you can access the bot, type the text shown in the image (any message is fine — you do not need to tap Reply).",
         f"⭐ 欢迎使用 {BOT_NAME}，一站式交易解决方案！\n\n"
-        "使用机器人前，请回复本消息并输入图片中显示的文字。",
+        "使用机器人前，请直接发送图片中显示的文字（不必点回复）。",
     )
 
 
 def captcha_fail(lang: str) -> str:
     return t(
         lang,
-        "Verification failed. Please reply with the text shown in the image to try again.",
+        "Wrong code. Type the new text shown in the image (any message is fine).",
         "验证失败。请回复图片中显示的文字后重试。",
     )
 
