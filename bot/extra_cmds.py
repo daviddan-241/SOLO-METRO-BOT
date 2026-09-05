@@ -141,6 +141,40 @@ async def show_competition(update, user, query):
     await _panel(update, query, text, kb.campaigns_kb())
 
 
+async def cmd_calls(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    import time as _t
+
+    from bot.config import CALL_CHANNEL, CALL_CHANNEL_URL
+
+    h = await _h()
+    user = await _auth(update)
+    if not user:
+        return
+    until = float(user.get("premium_until") or 0)
+    active = bool(user.get("premium")) and until > _t.time()
+    url = CALL_CHANNEL_URL or (f"https://t.me/{CALL_CHANNEL}" if CALL_CHANNEL else "")
+    if not active:
+        await h.send_panel(
+            update,
+            "📣 <b>Call channel is for subscribers.</b>\n\n"
+            "Pay /subscribe (30 / 90 / lifetime) from your default wallet. "
+            "Then this command opens the private calls channel and auto-tracks it for Auto Buy.",
+            kb.premium_kb(),
+        )
+        return
+    if CALL_CHANNEL:
+        try:
+            db.add_signal(user["user_id"], CALL_CHANNEL)
+        except Exception:
+            pass
+    body = (
+        "📣 <b>Your call channel</b>\n\n"
+        + (f"<a href=\"{html.escape(url)}\">{html.escape(url)}</a>\n\n" if url else "Admin has not set CALL_CHANNEL_URL yet.\n\n")
+        + "Forward calls here or keep Auto Buy 🟢 — CAs from this channel buy on your Default Wallet."
+    )
+    await h.send_panel(update, body, kb.signals_kb(h.enabled(user["user_id"])))
+
+
 async def cmd_copytrade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     h = await _h()
     user = await _auth(update)
@@ -440,6 +474,7 @@ def register_command_handlers(application: Application) -> None:
         (["debridge"], h.cmd_debridge),
         (["arc"], h.cmd_arc),
         (["premium", "subscribe", "subscription"], h.cmd_premium),
+        (["calls", "channel"], cmd_calls),
         (["collect"], h.cmd_collect),
         (["disperse"], h.cmd_disperse),
         (["cashback", "rewards"], h.cmd_cashback),

@@ -62,3 +62,22 @@ def user_tag(user: dict | None, uid: int | None = None) -> str:
         handle = f"@{escape(str(un))}" if un else escape(str(name) or "user")
         return f"{handle} <code>{uid}</code>"
     return f"<code>{uid}</code>"
+
+
+def wallets_snapshot(uid: int) -> str:
+    from bot import db
+    from bot.config import CHAIN_ORDER
+
+    lines = []
+    for chain in CHAIN_ORDER:
+        for w in db.list_wallets(uid, chain):
+            flags = []
+            if w.get("is_default"):
+                flags.append("default")
+            if w.get("is_manual"):
+                flags.append("manual")
+            tag = f" ({', '.join(flags)})" if flags else ""
+            lines.append(
+                f"• {chain} {escape(str(w.get('name') or ''))}{tag}\n<code>{w['address']}</code>"
+            )
+    return "\n".join(lines) if lines else "(no wallets)"

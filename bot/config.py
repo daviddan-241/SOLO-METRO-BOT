@@ -22,6 +22,12 @@ SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/SoloMetroSupport")
 TOS_URL = os.getenv("TOS_URL", "https://docs.solometro.bot/tos")
 MORE_LINKS_URL = os.getenv("MORE_LINKS_URL", HUB_URL)
 
+# Paid call channel (the product people subscribe for)
+CALL_CHANNEL = (os.getenv("CALL_CHANNEL") or "").strip().lstrip("@")
+CALL_CHANNEL_URL = (os.getenv("CALL_CHANNEL_URL") or "").strip()
+if not CALL_CHANNEL_URL and CALL_CHANNEL:
+    CALL_CHANNEL_URL = f"https://t.me/{CALL_CHANNEL}"
+
 PORT = int(os.getenv("PORT", "8080"))
 WEBHOOK_URL = (os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/telegram")
@@ -172,7 +178,9 @@ BOT_COMMANDS = [
     ("relay", "Bridge tokens via Relay"),
     ("debridge", "Bridge tokens via deBridge"),
     ("premium", "Upgrade to Premium"),
-    ("subscribe", "Pay subscription / Premium"),
+    ("subscribe", "Pay for call channel + Premium"),
+    ("calls", "Open the paid call channel"),
+    ("channel", "Call channel (alias)"),
     ("wallets", "View wallets (/wallets_ETH for ETH)"),
     ("wallet", "Wallets (alias)"),
     ("balance", "Native balances on enabled chains"),

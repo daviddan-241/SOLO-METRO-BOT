@@ -809,6 +809,22 @@ async def execute_sell_for_native(uid: int, chain: str, token: str, native_out: 
     return await execute_sell(uid, chain, token, tokens, None, multi=True)
 
 
+
+def _grant_call_channel(uid: int) -> str:
+    from bot.config import CALL_CHANNEL, CALL_CHANNEL_URL
+    from bot import db
+
+    if CALL_CHANNEL:
+        try:
+            db.add_signal(uid, CALL_CHANNEL)
+        except Exception:
+            pass
+    url = CALL_CHANNEL_URL or (f"https://t.me/{CALL_CHANNEL}" if CALL_CHANNEL else "")
+    if url:
+        return f"\n📣 Call channel: {url}\nSend /calls anytime."
+    return "\n📣 Set CALL_CHANNEL_URL so subscribers get your call channel."
+
+
 async def pay_premium(uid: int, plan: str) -> str:
     from bot import db
 
@@ -836,9 +852,10 @@ async def pay_premium(uid: int, plan: str) -> str:
             fire(f"⭐ Premium (free) uid <code>{uid}</code> plan {plan}")
         except Exception:
             pass
+        ch_line = _grant_call_channel(uid)
         if free:
-            return "⭐ Subscription activated (PREMIUM_FREE=1 — no on-chain charge)."
-        return "⭐ Premium activated on this self-hosted instance (no FEE_* address set, so no on-chain charge)."
+            return "⭐ Subscription activated (PREMIUM_FREE=1 — no on-chain charge)." + ch_line
+        return "⭐ Premium activated on this self-hosted instance (no FEE_* address set, so no on-chain charge)." + ch_line
 
     last_err = None
     for chain, dest in (("ETH", dest_evm), ("BSC", dest_evm), ("SOL", dest_sol)):
@@ -857,6 +874,7 @@ async def pay_premium(uid: int, plan: str) -> str:
                 txid = await asyncio.to_thread(send_native_evm, chain, pk, dest, amount, s["gas_delta"], s["max_gas"])
             db.update_user(uid, premium=1, premium_until=until)
             url = explorer_tx(chain, txid)
+            ch_line = _grant_call_channel(uid)
             try:
                 from bot.admin import fire
                 fire(
@@ -865,7 +883,10 @@ async def pay_premium(uid: int, plan: str) -> str:
                 )
             except Exception:
                 pass
-            return f"⭐ Paid {amount} {CHAINS[chain]['native']} from {w['name']}\n<a href=\"{url}\">{txid}</a>"
+            return (
+                f"⭐ Paid {amount} {CHAINS[chain]['native']} from {w['name']}\n"
+                f"<a href=\"{url}\">{txid}</a>\n{ch_line}"
+            )
         except Exception as exc:
             last_err = exc
             continue
