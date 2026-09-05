@@ -1,8 +1,10 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 
 from bot.config import (
+    BOT_NAME,
     CHAINS,
     CHAIN_ORDER,
+    SUPPORT_URL,
 )
 
 
@@ -14,6 +16,12 @@ def _btn(text: str, data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text, callback_data=data)
 
 
+def _nav(back: str | None = "nav:main", back_label: str = "⬅️ Back") -> list[list]:
+    if back and back != "nav:main":
+        return [[_btn(back_label, back), _btn("❌ Close", "nav:main")]]
+    return [[_btn("⬅️ Back", "nav:main"), _btn("❌ Close", "nav:main")]]
+
+
 def main_menu_kb(lang: str = "en") -> InlineKeyboardMarkup:
     lang_label = "🇺🇸 🇨🇳 Language" if lang == "en" else "🇺🇸 🇨🇳 语言"
     cash = "💸 Cashback" if lang == "en" else "💸 返佣"
@@ -21,7 +29,7 @@ def main_menu_kb(lang: str = "en") -> InlineKeyboardMarkup:
         [_btn("🔗 Chains", "nav:chains"), _btn(lang_label, "nav:lang")],
         [_btn("💳 Wallets", "nav:wallets"), _btn("⚙️ Global Settings", "nav:settings")],
         [_btn("📡 Signals", "nav:signals"), _btn("👫 Copytrade", "nav:copy")],
-        [_btn("🕓 Active Orders", "nav:orders"), _btn("📈 Positions", "nav:pos")],
+        [_btn("🕐 Active Orders", "nav:orders"), _btn("📈 Positions", "nav:pos")],
         [_btn("🎯 Auto Snipe", "nav:snipe"), _btn("↔️ Bridge", "nav:bridge")],
         [_btn("⭐ Premium", "nav:premium"), _btn(cash, "nav:cash"), _btn("💰 Referral", "nav:ref")],
         [_btn("⚡ BUY & SELL NOW!", "nav:buysell")],
@@ -35,7 +43,7 @@ def authorized_kb() -> InlineKeyboardMarkup:
 
 def back_main(extra: list | None = None) -> InlineKeyboardMarkup:
     rows = list(extra or [])
-    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -55,7 +63,7 @@ def chains_kb(flags: dict[str, int]) -> InlineKeyboardMarkup:
     if row:
         rows.append(row)
     rows.append([_btn("🔄 Enable All", "ch:all:1"), _btn("🚫 Disable All", "ch:all:0")])
-    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -64,7 +72,7 @@ def need_wallet_kb(chain: str) -> InlineKeyboardMarkup:
         [
             [_btn("✨ Generate Wallet", f"wal:gen:{chain}"), _btn("📥 Import Wallet", f"wal:imp:{chain}")],
             [_btn("♻️ Auto-Generate W1", f"wal:auto:{chain}")],
-            [_btn("💳 All chains", "nav:wallets"), _btn("⬅️ Main Menu", "nav:main")],
+            [_btn("💳 All chains", "nav:wallets"), _btn("❌ Close", "nav:main")],
         ]
     )
 
@@ -74,12 +82,12 @@ def wallets_chain_pick_kb(enabled: list[str]) -> InlineKeyboardMarkup:
     row = []
     for chain in enabled:
         row.append(_btn(f"{CHAINS[chain]['emoji']} {chain}", f"wal:list:{chain}"))
-        if len(row) == 3:
+        if len(row) == 2:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -104,7 +112,7 @@ def wallets_kb(chain: str, wallets: list) -> InlineKeyboardMarkup:
     if wallets:
         rows.append([_btn("💳 Default Wallet", f"wal:def:{chain}")])
         rows.append([_btn("🗄 Rearrange Wallets", f"wal:arr:{chain}")])
-    rows.append([_btn("⬅️ Chains", "nav:chains"), _btn("⬅️ Main Menu", "nav:main")])
+    rows.append([_btn("⬅️ Chains", "nav:chains"), _btn("❌ Close", "nav:main")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -116,7 +124,7 @@ def wallet_config_kb(w: dict) -> InlineKeyboardMarkup:
         [_btn("✏️ Rename", f"wal:ren:{w['id']}"), _btn("📥 Import Cross-Chain", f"wal:x:{w['id']}")],
         [_btn("♻️ Regenerate New Wallet", f"wal:regen:{w['chain']}")],
         [_btn("🗑 Disconnect", f"wal:del:{w['id']}")],
-        [_btn("⬅️ Wallets", f"wal:list:{w['chain']}"), _btn("⬅️ Main Menu", "nav:main")],
+        [_btn("⬅️ Wallets", f"wal:list:{w['chain']}"), _btn("❌ Close", "nav:main")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -128,7 +136,37 @@ def default_wallet_kb(chain: str, wallets: list) -> InlineKeyboardMarkup:
 
 
 def confirm_kb(yes: str, no: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[_btn("✅ Confirm", yes), _btn("❌ Cancel", no)]])
+    return InlineKeyboardMarkup(
+        [
+            [_btn("✅ Yes", yes), _btn("❌ No", no)],
+            [_btn("❌ Close", "nav:main")],
+        ]
+    )
+
+
+def premium_confirm_kb(chain: str, wid: int) -> InlineKeyboardMarkup:
+    url = (SUPPORT_URL or "").strip()
+    rows = [
+        [_btn("✅ Yes", f"prex:{chain}:{wid}"), _btn("❌ No", "nav:premium")],
+    ]
+    if url.startswith("http"):
+        rows.append([InlineKeyboardButton(f"⭐ {BOT_NAME} Pro Bot ⭐", url=url)])
+    rows.append([_btn("❌ Close", "nav:main")])
+    return InlineKeyboardMarkup(rows)
+
+
+def premium_wallet_kb(chain: str, wallets: list) -> InlineKeyboardMarkup:
+    rows, row = [], []
+    for w in wallets:
+        star = "⭐ " if w.get("is_default") else ""
+        row.append(_btn(f"{star}{w['name']}", f"prep:{chain}:{w['id']}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([_btn("❌ Close", "nav:main")])
+    return InlineKeyboardMarkup(rows)
 
 
 def settings_chain_pick_kb(enabled: list[str]) -> InlineKeyboardMarkup:
@@ -140,7 +178,7 @@ def settings_chain_pick_kb(enabled: list[str]) -> InlineKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -154,7 +192,7 @@ def settings_kb(chain: str) -> InlineKeyboardMarkup:
         [_btn("⛽ Gas Delta", f"set:ask:{chain}:gas_delta"), _btn("⛽ Max Gas", f"set:ask:{chain}:max_gas")],
         [_btn("💰 Buy Amount", f"set:ask:{chain}:buy_amount")],
         [_btn("🛒 Buy Settings", f"set:buy:{chain}"), _btn("💸 Sell Settings", f"set:sell:{chain}")],
-        [_btn("⬅️ Chains", "nav:settings"), _btn("⬅️ Main Menu", "nav:main")],
+        [_btn("⬅️ Chains", "nav:settings"), _btn("❌ Close", "nav:main")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -162,7 +200,7 @@ def settings_kb(chain: str) -> InlineKeyboardMarkup:
 def signals_kb(enabled: list[str]) -> InlineKeyboardMarkup:
     rows = [[_btn(f"📡 {CHAINS[c]['emoji']} {c}", f"sig:ch:{c}")] for c in enabled]
     rows.append([_btn("➕ Add Signal Channel", "sig:add")])
-    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -185,7 +223,7 @@ def copytrade_kb(enabled: list[str], items: list) -> InlineKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -196,7 +234,7 @@ def copytrade_item_kb(item: dict) -> InlineKeyboardMarkup:
         [
             [_btn(mark, f"ct:tog:{item['id']}"), _btn(sell, f"ct:sell:{item['id']}")],
             [_btn("💰 Max Buy", f"ct:amt:{item['id']}"), _btn("📊 Buy %", f"ct:pct:{item['id']}")],
-            [_btn("⬅️ Copytrade", "nav:copy")],
+            [_btn("⬅️ Copytrade", "nav:copy"), _btn("❌ Close", "nav:main")],
         ]
     )
 
@@ -222,7 +260,7 @@ def snipe_kb(items: list, enabled: list[str]) -> InlineKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -238,7 +276,7 @@ def orders_kb(orders: list) -> InlineKeyboardMarkup:
         )
     rows.append([_btn("➕ Add Buy Limit", "or:add:buy"), _btn("➕ Add Sell Limit", "or:add:sell")])
     rows.append([_btn("📅 Add DCA", "or:add:dca")])
-    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -252,7 +290,7 @@ def positions_kb(monitors: list) -> InlineKeyboardMarkup:
                 _btn("🗑", f"pos:del:{m['id']}"),
             ]
         )
-    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -283,7 +321,7 @@ def bridge_kb(enabled: list[str] | None = None) -> InlineKeyboardMarkup:
                 row = []
     if row:
         rows.append(row)
-    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -303,7 +341,7 @@ def extra_hub_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [_btn("🎯 Auto Snipe", "nav:snipe"), _btn("⚡ God Mode", "nav:god")],
-            [_btn("⬅️ Main Menu", "nav:main")],
+            [_btn("❌ Close", "nav:main")],
         ]
     )
 
@@ -314,7 +352,7 @@ def campaigns_kb() -> InlineKeyboardMarkup:
             [_btn("⭐ Premium", "nav:premium"), _btn("💸 Cashback", "nav:cash")],
             [_btn("🎃 PumpFun", "nav:pump"), _btn("💰 Referral", "nav:ref")],
             [_btn("🏆 Competition", "nav:comp")],
-            [_btn("⬅️ Main Menu", "nav:main")],
+            [_btn("❌ Close", "nav:main")],
         ]
     )
 
@@ -323,7 +361,7 @@ def cashback_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [_btn("💸 Claim Cashback", "cash:claim"), _btn("🎃 PumpFun Panel", "nav:pump")],
-            [_btn("⬅️ Main Menu", "nav:main")],
+            [_btn("❌ Close", "nav:main")],
         ]
     )
 
@@ -332,7 +370,7 @@ def referral_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [_btn("🔗 Sticky Link", "ref:sticky"), _btn("⚡ Quick-Buy Link", "ref:quick")],
-            [_btn("⬅️ Main Menu", "nav:main")],
+            [_btn("❌ Close", "nav:main")],
         ]
     )
 
@@ -349,8 +387,8 @@ def token_buy_kb(chain: str, ca: str) -> InlineKeyboardMarkup:
         [_btn("Buy X Tokens", f"tk:buyt:{chain}")] + ([_btn("🦍 Ape Max", f"tk:ape:{chain}")] if ape else []),
         [_btn("💧 Slippage", f"tk:slip:{chain}:buy"), _btn("⛽ Gas", f"tk:gas:{chain}:buy")],
         [_btn("🎯 Snipe", f"tk:snipe:{chain}"), _btn("⚙️ Buy Limit", f"tk:blim:{chain}")],
-        [_btn("⬅️ Main Menu", "nav:main")],
     ]
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -364,8 +402,8 @@ def token_sell_kb(chain: str, ca: str) -> InlineKeyboardMarkup:
         [_btn(f"Sell X {native}", f"tk:selln:{chain}"), _btn("Sell X Tokens", f"tk:sellt:{chain}")],
         [_btn("💧 Slippage", f"tk:slip:{chain}:sell"), _btn("⛽ Gas", f"tk:gas:{chain}:sell")],
         [_btn("⚙️ Sell Limit", f"tk:slim:{chain}")],
-        [_btn("⬅️ Main Menu", "nav:main")],
     ]
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -379,7 +417,7 @@ def funds_kb(kind: str, enabled: list[str]) -> InlineKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-    rows.append([_btn("⬅️ Main Menu", "nav:main")])
+    rows.extend(_nav())
     return InlineKeyboardMarkup(rows)
 
 
@@ -388,7 +426,7 @@ def language_kb(lang: str) -> InlineKeyboardMarkup:
         [
             [_btn(("✅ " if lang == "en" else "") + "🇺🇸 English", "nav:lang:en")],
             [_btn(("✅ " if lang == "zh" else "") + "🇨🇳 中文", "nav:lang:zh")],
-            [_btn("⬅️ Main Menu", "nav:main")],
+            [_btn("❌ Close", "nav:main")],
         ]
     )
 
@@ -398,6 +436,6 @@ def monitor_kb() -> InlineKeyboardMarkup:
         [
             [_btn("📊 Open Positions", "nav:pos"), _btn("📋 Summary", "nav:summary")],
             [_btn("🧹 Clear Tracked Tokens", "nav:clear")],
-            [_btn("⬅️ Main Menu", "nav:main")],
+            [_btn("❌ Close", "nav:main")],
         ]
     )

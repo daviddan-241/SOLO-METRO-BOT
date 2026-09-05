@@ -20,6 +20,7 @@ from bot.config import (
     CAPTCHA_LOCK_SECONDS,
     DOCS_URL,
     HUB_URL,
+    SUPPORT_HANDLE,
     SUPPORT_URL,
 )
 from bot.crypto_wallets import (
@@ -713,6 +714,29 @@ async def show_premium(update, user, query):
         await safe_edit(query, text, kb.premium_kb())
     else:
         await send_panel(update, text, kb.premium_kb())
+
+
+async def show_premium_confirm(update, user, query, chain: str, w: dict) -> None:
+    usd = premium_usd()
+    native = CHAINS[chain]["native"]
+    amt = await usd_to_native(chain, usd)
+    until = float(user.get("premium_until") or 0)
+    import time as _t
+
+    active = bool(user.get("premium")) and until > _t.time()
+    mark = "✅" if active else "❌"
+    support = SUPPORT_HANDLE or "@support"
+    text = (
+        f"<b>Premium:</b> {mark}\n\n"
+        f"The bot will now convert <b>{fmt_amt(amt)} {native}</b> to <b>{usd} USDC</b>. Do you confirm?\n\n"
+        f"⚠️ IF YOU WANT YOUR SETTINGS TO BE AUTOMATICALLY TRANSFERRED TO THE PREMIUM BOT, "
+        f"MAKE SURE YOU CONTACT {html.escape(support)} BEFORE YOU COMPLETE THIS TRANSACTION.\n"
+        f"⚠️ <b>THIS PURCHASE IS NON-REFUNDABLE.</b>"
+    )
+    if query:
+        await safe_edit(query, text, kb.premium_confirm_kb(chain, w["id"]))
+    else:
+        await send_panel(update, text, kb.premium_confirm_kb(chain, w["id"]))
 
 
 async def show_cashback(update, user, query):

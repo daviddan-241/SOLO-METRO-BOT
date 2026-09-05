@@ -38,6 +38,7 @@ CHAIN_META = {
         "weth": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
         "flashbots": "https://rpc.flashbots.net",
         "goplus": "1",
+        "usdc": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
     },
     "BSC": {
         "chain_id": 56,
@@ -54,6 +55,7 @@ CHAIN_META = {
         "router": "0x10ED43C718714eb63d5aA57B78B54704E256024E",
         "weth": "0xBB4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
         "goplus": "56",
+        "usdc": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
     },
     "BASE": {
         "chain_id": 8453,
@@ -69,6 +71,7 @@ CHAIN_META = {
         "router": "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24",
         "weth": "0x4200000000000000000000000000000000000006",
         "goplus": "8453",
+        "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     },
     "ARB": {
         "chain_id": 42161,
@@ -84,6 +87,7 @@ CHAIN_META = {
         "router": "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
         "weth": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
         "goplus": "42161",
+        "usdc": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
     },
     "AVAX": {
         "chain_id": 43114,
@@ -99,6 +103,7 @@ CHAIN_META = {
         "router": "0x60aE616a2155Ee3d9A68541Ba4544862310933d4",
         "weth": "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
         "goplus": "43114",
+        "usdc": "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
     },
     "SONIC": {
         "chain_id": 146,
@@ -113,6 +118,7 @@ CHAIN_META = {
         "router": "",
         "weth": "0x039e2fB66102314Ce7b64Ce5Ce3E5183bc94aD38",
         "goplus": "",
+        "usdc": "0x29219dd400f2Bf60E5a23d71Ae5C0473F3fA36Bc",
     },
     "MONAD": {
         "chain_id": 143,

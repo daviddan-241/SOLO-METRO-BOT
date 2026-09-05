@@ -263,19 +263,22 @@ def _v2_sell(chain: str, pk: str, token: str, amount: Decimal, slip: float, gas_
     return _sign_send(w3, acct, tx)
 
 
-async def lifi_quote(from_chain: int, to_chain: int, from_token: str, to_token: str, amount_wei: int, from_addr: str, slip: float) -> dict:
+async def lifi_quote(from_chain: int, to_chain: int, from_token: str, to_token: str, amount_wei: int, from_addr: str, slip: float, to_address: str | None = None) -> dict:
     c = await http()
+    params = {
+        "fromChain": from_chain,
+        "toChain": to_chain,
+        "fromToken": from_token,
+        "toToken": to_token,
+        "fromAmount": str(amount_wei),
+        "fromAddress": from_addr,
+        "slippage": max(0.001, slip / 100.0),
+    }
+    if to_address:
+        params["toAddress"] = to_address
     r = await c.get(
         "https://li.quest/v1/quote",
-        params={
-            "fromChain": from_chain,
-            "toChain": to_chain,
-            "fromToken": from_token,
-            "toToken": to_token,
-            "fromAmount": str(amount_wei),
-            "fromAddress": from_addr,
-            "slippage": max(0.001, slip / 100.0),
-        },
+        params=params,
     )
     data = r.json()
     if r.status_code >= 400:
