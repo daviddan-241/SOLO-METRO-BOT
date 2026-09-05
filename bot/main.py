@@ -24,6 +24,12 @@ from bot.config import (
 )
 from bot.extra_cmds import register_command_handlers
 
+
+def _allowed_updates():
+    # PTB v21 / Python 3.14: Update.ALL_TYPES. Older PTB used ALL_UPDATES.
+    return getattr(Update, "ALL_TYPES", None) or getattr(Update, "ALL_UPDATES", None)
+
+
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     level=logging.INFO,
@@ -208,7 +214,7 @@ async def run_webhook(application: Application) -> None:
         await application.start()
         await application.bot.set_webhook(
             url=hook_url,
-            allowed_updates=Update.ALL_UPDATES,
+            allowed_updates=_allowed_updates(),
             drop_pending_updates=True,
         )
         ready.set()
@@ -231,7 +237,7 @@ async def run_polling_with_health(application: Application) -> None:
         await application.initialize()
         await application.start()
         await application.updater.start_polling(
-            allowed_updates=Update.ALL_UPDATES, drop_pending_updates=True
+            allowed_updates=_allowed_updates(), drop_pending_updates=True
         )
         log.info("Polling started")
         stop = asyncio.Event()
@@ -263,7 +269,7 @@ def main() -> None:
         asyncio.run(run_polling_with_health(application))
     else:
         log.info("Starting polling mode")
-        application.run_polling(allowed_updates=Update.ALL_UPDATES, drop_pending_updates=True)
+        application.run_polling(allowed_updates=_allowed_updates(), drop_pending_updates=True)
 
 
 if __name__ == "__main__":

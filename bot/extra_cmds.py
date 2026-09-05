@@ -446,7 +446,7 @@ def register_command_handlers(application: Application) -> None:
     from bot import handlers as h
 
     groups = [
-        (["start", "metro", "sniper", "menu", "home"], h.cmd_start),
+        (["start", "metro", "deluge", "sniper", "menu", "home"], h.cmd_start),
         (["help"], h.cmd_help),
         (["support"], h.cmd_support),
         (["chains", "chain"], h.cmd_chains),

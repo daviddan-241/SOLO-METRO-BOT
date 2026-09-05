@@ -16,7 +16,7 @@ services:
       - key: CALL_CHANNEL_URL
         sync: false
       - key: BOT_NAME
-        value: Solo Metro
+        value: Deluge
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: FORCE_POLLING

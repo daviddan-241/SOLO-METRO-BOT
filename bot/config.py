@@ -10,9 +10,9 @@ DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-BOT_NAME = os.getenv("BOT_NAME", "Solo Metro").strip() or "Solo Metro"
-BOT_HANDLE = os.getenv("BOT_HANDLE", "@SoloMetroBot").strip()
-SUPPORT_HANDLE = os.getenv("SUPPORT_HANDLE", "@SoloMetroSupport").strip()
+BOT_NAME = os.getenv("BOT_NAME", "Deluge").strip() or "Deluge"
+BOT_HANDLE = os.getenv("BOT_HANDLE", "@DelugeBot").strip()
+SUPPORT_HANDLE = os.getenv("SUPPORT_HANDLE", "@DelugeSupport").strip()
 
 HUB_URL = os.getenv("HUB_URL", "https://t.me/SoloMetroHub")
 UPDATES_URL = os.getenv("UPDATES_URL", "https://t.me/SoloMetroUpdates")
@@ -144,7 +144,8 @@ CHAIN_ORDER = list(CHAINS.keys())
 
 BOT_COMMANDS = [
     ("start", "Open the main menu"),
-    ("metro", "Open Solo Metro main menu"),
+    ("metro", "Open Deluge main menu"),
+    ("deluge", "Open Deluge main menu"),
     ("sniper", "Open the sniper / main menu"),
     ("menu", "Open the main menu"),
     ("home", "Open the main menu"),
