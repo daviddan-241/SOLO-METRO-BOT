@@ -154,6 +154,21 @@ def backup_now(primary: str) -> list[str]:
     return done
 
 
+def integrity_check(db_path: str) -> tuple[bool, str]:
+    """PRAGMA quick_check — (healthy, detail). Catches corruption early so a
+    backup can be restored before users hit errors."""
+    try:
+        con = sqlite3.connect(db_path)
+        try:
+            row = con.execute("PRAGMA quick_check").fetchone()
+            ok = bool(row) and str(row[0]).lower() == "ok"
+            return ok, str(row[0]) if row else "no result"
+        finally:
+            con.close()
+    except Exception as exc:
+        return False, f"integrity check failed: {exc}"
+
+
 def restore_if_needed(primary: str) -> str:
     """If primary is missing/empty, restore newest backup into place."""
     try:

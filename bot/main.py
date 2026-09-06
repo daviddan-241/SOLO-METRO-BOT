@@ -195,6 +195,51 @@ async def post_init(app: Application) -> None:
         )
     except Exception:
         log.exception("boot admin alert")
+    # --- boot self-check: DB integrity + wallet decryptability ----------------
+    # Catches the two silent killers before users ever hit them: a corrupted
+    # SQLite file, and wallets that can no longer be decrypted (BOT_TOKEN
+    # rotated without ENCRYPTION_KEY set, or the key file was wiped).
+    try:
+        from bot.admin import alert
+        from bot.config import DB_PATH as _DBP2
+        from bot.persist import integrity_check
+
+        _ok, _detail = integrity_check(_DBP2)
+        _bits = [f"DB integrity: {'OK' if _ok else 'FAIL - ' + str(_detail)[:120]}"]
+        _bad = 0
+        _total = 0
+        try:
+            from bot import db as _dbmod
+            from bot.crypto_wallets import decrypt_secret
+
+            with _dbmod.connect() as _con:
+                _rows = _con.execute(
+                    "SELECT id, enc_key FROM wallets ORDER BY id DESC LIMIT 50"
+                ).fetchall()
+            _total = len(_rows)
+            for _r in _rows:
+                try:
+                    if _r["enc_key"]:
+                        decrypt_secret(_r["enc_key"])
+                except Exception:
+                    _bad += 1
+        except Exception as _exc:
+            log.warning("wallet decrypt sample failed: %s", _exc)
+        if _total:
+            _bits.append(f"Wallet decrypt: {_total - _bad}/{_total} OK (newest sample)")
+        await alert("\n".join(_bits))
+        if _bad:
+            await alert(
+                f"CRITICAL: {_bad}/{_total} stored wallets can NOT be decrypted with the "
+                f"current key. Cause: ENCRYPTION_KEY changed, or the BOT_TOKEN was rotated "
+                f"without setting ENCRYPTION_KEY. Fix: set ENCRYPTION_KEY (or the previous "
+                f"BOT_TOKEN) back and redeploy — the wallets are NOT lost, only locked."
+            )
+        if not _ok:
+            log.error("DB integrity check FAILED: %s", _detail)
+    except Exception:
+        log.exception("boot self-check")
+
     from bot.worker import run as worker_run
 
     async def _worker() -> None:
