@@ -151,7 +151,7 @@ async def sync_menu_commands(app: Application) -> int:
 
 
 async def post_init(app: Application) -> None:
-    await sync_menu_commands(app)
+    menu_ok = await sync_menu_commands(app)
     try:
         await app.bot.set_my_description(texts.bot_description()[:512])
         await app.bot.set_my_short_description(
@@ -163,6 +163,33 @@ async def post_init(app: Application) -> None:
     from bot.admin import set_bot
 
     set_bot(app.bot)
+    if menu_ok < 3:
+        # Telegram hiccup during boot — one silent retry a minute later.
+        async def _resync() -> None:
+            await asyncio.sleep(60)
+            try:
+                await sync_menu_commands(app)
+            except Exception:
+                log.warning("delayed menu resync failed")
+
+        asyncio.create_task(_resync())
+    try:
+        from bot.admin import fire
+        from bot.config import DB_PATH as _DBP
+
+        try:
+            import os as _os
+
+            _sz = _os.path.getsize(_DBP) if _os.path.exists(_DBP) else 0
+        except OSError:
+            _sz = 0
+        fire(
+            f"🟢 <b>{BOT_NAME} booted</b>\n"
+            f"Menu: {len(BOT_COMMANDS)} cmds ({menu_ok}/3 scopes)\n"
+            f"DB: <code>{_DBP}</code> ({_sz // 1024} KB)"
+        )
+    except Exception:
+        pass
     from bot.worker import run as worker_run
 
     async def _worker() -> None:
@@ -211,9 +238,12 @@ def build_application() -> Application:
         .build()
     )
     register_command_handlers(application)
-    # group=1 so real handlers (incl. /wallets_ETH regex aliases) run first;
-    # unknown_command only fires when nothing else matched.
-    application.add_handler(MessageHandler(filters.COMMAND, unknown_command), group=1)
+    # MUST stay in group 0 (default), added LAST: within one group only the
+    # first matching handler runs, so unknown_command fires solely when no
+    # real handler matched. NOTE: different groups ALL fire (groups don't
+    # block each other), so putting this in group=1 spams "Unknown command"
+    # after every valid command. Do not move it.
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     application.add_error_handler(on_error)
     return application
 

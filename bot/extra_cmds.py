@@ -454,10 +454,44 @@ async def cmd_syncmenu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await h.send_panel(update, "Admin only.")
         return
     try:
+        from telegram import BotCommandScopeAllPrivateChats
+
+        from bot.config import BOT_COMMANDS
         from bot.main import sync_menu_commands
 
         n = await sync_menu_commands(context.application)
-        await h.send_panel(update, f"✅ Menu re-synced ({n}/3 scopes). Kill and reopen the chat if Telegram cached the old menu.")
+        try:
+            live = await context.bot.get_my_commands(scope=BotCommandScopeAllPrivateChats())
+            live_n = len(live)
+        except Exception:
+            live_n = -1
+        try:
+            btn = await context.bot.get_chat_menu_button()
+            btn_t = type(btn).__name__
+        except Exception as exc:
+            btn_t = f"read failed ({exc})"
+        ok = live_n == len(BOT_COMMANDS) and "Commands" in btn_t
+        lines = [
+            f"🧭 <b>Menu diagnostics</b>",
+            f"Scopes set: <b>{n}/3</b>",
+            f"Live commands (private scope): <b>{live_n}/{len(BOT_COMMANDS)}</b>",
+            f"Menu button type: <b>{html.escape(btn_t)}</b>",
+            "",
+        ]
+        if ok:
+            lines.append(
+                "✅ Server side is perfect — Telegram accepted everything. "
+                "If you still see no blue Menu pill, it is your <b>client app</b>: "
+                "type <code>/</code> (commands should autocomplete), kill + reopen the chat, "
+                "and check the <b>official Telegram app</b> — some third-party clients (e.g. SwiftGram) "
+                "render the Menu button differently or not at all."
+            )
+        else:
+            lines.append(
+                "⚠️ Telegram did not accept the full menu. Check BotFather → /mybots → Bot Settings → "
+                "<b>Menu Button</b> is not forcing something else, then run /syncmenu again."
+            )
+        await h.send_panel(update, "\n".join(lines))
     except Exception as exc:
         await h.send_panel(update, f"❌ Sync failed: {html.escape(str(exc)[:300])}")
 
