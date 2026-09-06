@@ -18,6 +18,30 @@ _copy_seen: dict[int, str] = {}
 _snipe_lock: set[int] = set()
 
 
+def _copy_key(item_id: int) -> str:
+    return f"copy_seen:{item_id}"
+
+
+def _copy_get(item_id: int) -> str:
+    if item_id in _copy_seen:
+        return _copy_seen[item_id]
+    try:
+        v = db.worker_get(_copy_key(item_id), "")
+        if v:
+            _copy_seen[item_id] = v
+        return v
+    except Exception:
+        return ""
+
+
+def _copy_put(item_id: int, val: str) -> None:
+    _copy_seen[item_id] = val
+    try:
+        db.worker_set(_copy_key(item_id), val)
+    except Exception:
+        pass
+
+
 async def notify(bot, user_id: int, text: str) -> None:
     try:
         await bot.send_message(user_id, text, parse_mode="HTML", disable_web_page_preview=True)
@@ -141,7 +165,7 @@ async def _copy_evm(it: dict, bot) -> None:
             out_logs = []
     else:
         out_logs = []
-    last = _copy_seen.get(it["id"], "")
+    last = _copy_get(it["id"])
     new_tokens = []
     for lg in logs:
         txh = lg["transactionHash"].hex() if hasattr(lg["transactionHash"], "hex") else str(lg["transactionHash"])
@@ -165,7 +189,7 @@ async def _copy_evm(it: dict, bot) -> None:
     amt = Decimal(str(it.get("buy_amount") or s["buy_amount"] or "0.05"))
     if new_tokens:
         token, txh = new_tokens[-1]
-        _copy_seen[it["id"]] = txh + token
+        _copy_put(it["id"], txh + token)
         if it.get("enabled"):
             res = await execute_buy(it["user_id"], chain, token, amt, multi=False)
             await notify(
@@ -198,9 +222,9 @@ async def _copy_sol(it: dict, bot) -> None:
     if not sigs:
         return
     newest = sigs[0].get("signature")
-    prev = _copy_seen.get(it["id"])
+    prev = _copy_get(it["id"])
     if not prev:
-        _copy_seen[it["id"]] = newest
+        _copy_put(it["id"], newest)
         return
     if newest == prev:
         return
@@ -210,7 +234,7 @@ async def _copy_sol(it: dict, bot) -> None:
         if s.get("signature") == prev:
             break
         fresh.append(s.get("signature"))
-    _copy_seen[it["id"]] = newest
+    _copy_put(it["id"], newest)
     if not fresh:
         return
     # fetch parsed tx for first new

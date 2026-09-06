@@ -8,6 +8,10 @@ __pycache__/
 .mypy_cache/
 data/*.db
 data/*.db-journal
+data/*.sqlite
+data/*.sqlite-journal
+data/.fernet.key
+data/.deluge_write_test
 *.log
 .DS_Store
 .idea/

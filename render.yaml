@@ -33,3 +33,12 @@ services:
         value: "200"
       - key: PREMIUM_DAYS
         value: "30"
+      - key: BIRDEYE_API_KEY
+        sync: false
+    # NOTE: Render Free has no persistent disk — SQLite + auto-backups in
+    # bot/persist.py survive restarts, but a full redeploy on Free can still
+    # wipe data/. For real persistence, upgrade to Starter and add:
+    # disk:
+    #   name: solo-metro-data
+    #   mountPath: /var/data
+    #   sizeGB: 1

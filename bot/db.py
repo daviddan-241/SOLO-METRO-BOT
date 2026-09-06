@@ -161,6 +161,19 @@ def init_db() -> None:
                 txid TEXT,
                 created_at REAL
             );
+
+            CREATE TABLE IF NOT EXISTS worker_state (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at REAL
+            );
+
+            CREATE TABLE IF NOT EXISTS token_cache (
+                ca TEXT PRIMARY KEY,
+                chain TEXT,
+                payload TEXT,
+                updated_at REAL
+            );
             """
         )
         def _col(table: str, name: str, decl: str) -> None:
@@ -731,3 +744,70 @@ def referral_count(user_id: int) -> int:
             "SELECT COUNT(*) AS c FROM users WHERE referred_by=?", (user_id,)
         ).fetchone()
         return int(row["c"])
+
+
+# ----- worker persistent state (survives restart) -----
+
+def worker_get(key: str, default: str = "") -> str:
+    with connect() as con:
+        row = con.execute("SELECT value FROM worker_state WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def worker_set(key: str, value: str) -> None:
+    with connect() as con:
+        con.execute(
+            "INSERT INTO worker_state(key, value, updated_at) VALUES(?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (key, value, time.time()),
+        )
+
+
+def integrity_ok() -> bool:
+    try:
+        with connect() as con:
+            row = con.execute("PRAGMA integrity_check").fetchone()
+            return bool(row and str(row[0]).lower() == "ok")
+    except Exception:
+        return False
+
+
+# ----- token cache (so 2yr-old / zero-volume tokens still open instantly) -----
+
+TOKEN_CACHE_TTL_LIVE = 45
+TOKEN_CACHE_TTL_DEAD = 6 * 3600
+
+
+def token_cache_get(ca: str) -> dict | None:
+    try:
+        with connect() as con:
+            row = con.execute("SELECT payload, updated_at FROM token_cache WHERE ca=?", (ca.lower(),)).fetchone()
+            if not row:
+                return None
+            payload = json.loads(row["payload"] or "{}")
+            age = time.time() - float(row["updated_at"] or 0)
+            live = bool(payload.get("price") or payload.get("liq"))
+            ttl = TOKEN_CACHE_TTL_LIVE if live else TOKEN_CACHE_TTL_DEAD
+            if age > ttl:
+                return None
+            payload["_cached_age"] = int(age)
+            return payload
+    except Exception:
+        return None
+
+
+def token_cache_put(ca: str, chain: str, payload: dict) -> None:
+    try:
+        slim = {k: payload.get(k) for k in (
+            "ok", "ca", "chain", "symbol", "name", "price", "mc", "liq",
+            "change", "dex", "pair_url", "pair_address", "warning", "h1",
+            "vol", "created", "sources", "decimals", "supply", "holders",
+        )}
+        with connect() as con:
+            con.execute(
+                "INSERT INTO token_cache(ca, chain, payload, updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(ca) DO UPDATE SET chain=excluded.chain, payload=excluded.payload, updated_at=excluded.updated_at",
+                (ca.lower(), chain, json.dumps(slim), time.time()),
+            )
+    except Exception:
+        pass

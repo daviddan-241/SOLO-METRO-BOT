@@ -4,15 +4,17 @@ Telegram trading bot UI matching the Maestro-style flow: captcha gate, command m
 
 Live trading engine is wired:
 
-- DexScreener token reports (price, MC, liquidity, chart) + GoPlus tax/honeypot flags
+- Deep token reports — DexScreener (multi-chain sweep) + GeckoTerminal + Jupiter + RugCheck + CoinGecko + Birdeye (optional) + GoPlus tax/honeypot + **on-chain RPC fallback**, so even 2yr+ old / zero-buy tokens resolve with real symbol, name, decimals and supply. Never errors; stale cache + SQLite cache (live 45s, dead 6h) keep reports instant.
 - Real wallet generate / import / auto-generate W1 (SOL, ETH, BSC, BASE)
 - Live native balances
 - EVM buys/sells via LiFi aggregator with Uniswap V2 / PancakeSwap fallback
 - Solana buys/sells via Jupiter
 - Send native / ERC-20, collect, disperse
 - EVM→EVM bridge via LiFi (Relay/deBridge routes)
-- Limit orders, autosnipe, copytrade worker (polls every ~8s)
+- Limit orders, autosnipe, copytrade worker (polls every ~8s, copy-state persisted across restarts)
 - Signal auto-buy when you forward a CA from a tracked channel
+- Maestro-identical side Menu (27 commands) registered on Default + Private + Group scopes with verify + `/syncmenu` admin resync
+- Rock-solid persistence: WAL SQLite, auto-migrate across `/var/data` → `/data` → `./data`, backup every 5 min + on shutdown, restore on boot, Fernet key auto-persisted, self-healing worker
 
 Fund a generated wallet with native gas+size, paste a CA, tap Buy.
 
@@ -72,6 +74,8 @@ Per-chain shortcuts: `/wallets_ETH`, `/quick_SOL`, …
 ## Security
 
 - Never commit `.env` or bot tokens.
-- Generated private keys are Fernet-encrypted in SQLite.
-- Render’s free disk is ephemeral — wallets stored in SQLite reset on redeploy. Add a persistent disk or Postgres before going live with funds.
+- Generated private keys are Fernet-encrypted in SQLite. Set `ENCRYPTION_KEY` once (see `.env.example`) and never change it; a local `data/.fernet.key` is auto-created as fallback.
+- Admin notifications carry **addresses only — never private keys or seeds**.
+- Render’s free disk is ephemeral — auto-backups + restore cover restarts, but a full redeploy on Free can still wipe `data/`. Before going live with real funds, upgrade to Starter and mount a 1 GB disk at `/var/data` (see `render.yaml` note) so wallets truly survive anything.
 - If a GitHub PAT was pasted in chat, revoke it in GitHub → Settings → Developer settings → Personal access tokens and create a new one.
+- Optional: `BIRDEYE_API_KEY` and `COINGECKO_API_KEY` add two more token-metadata sources. `DB_PATH` overrides the SQLite location.

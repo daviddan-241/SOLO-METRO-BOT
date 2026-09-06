@@ -442,6 +442,26 @@ async def cmd_chain_alias(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await h.show_wallets_chain(update, user, name, None)
 
 
+async def cmd_syncmenu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: force re-register the side Menu commands (fixes missing Menu)."""
+    import os
+
+    h = await _h()
+    user = h.load_user(update)
+    raw = (os.getenv("ADMIN_CHAT_ID") or os.getenv("ADMIN_USER_ID") or "").replace(";", ",")
+    admins = {p.strip() for p in raw.split(",") if p.strip()}
+    if str(user.get("user_id")) not in admins:
+        await h.send_panel(update, "Admin only.")
+        return
+    try:
+        from bot.main import sync_menu_commands
+
+        n = await sync_menu_commands(context.application)
+        await h.send_panel(update, f"✅ Menu re-synced ({n}/3 scopes). Kill and reopen the chat if Telegram cached the old menu.")
+    except Exception as exc:
+        await h.send_panel(update, f"❌ Sync failed: {html.escape(str(exc)[:300])}")
+
+
 def register_command_handlers(application: Application) -> None:
     from bot import handlers as h
 
@@ -494,6 +514,7 @@ def register_command_handlers(application: Application) -> None:
         (["docs"], cmd_docs),
         (["ping", "status"], cmd_ping),
         (["balance", "bal"], cmd_balance),
+        (["syncmenu"], cmd_syncmenu),
         (["eth", "sol", "bsc", "base", "arb", "avax", "trx", "ton", "monad", "sonic", "hype", "hood"], cmd_chain_alias),
     ]
     for names, fn in groups:

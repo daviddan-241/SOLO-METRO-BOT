@@ -6,6 +6,7 @@ import sys
 from aiohttp import web
 from telegram import (
     BotCommand,
+    BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
     BotCommandScopeDefault,
     MenuButtonCommands,
@@ -75,15 +76,20 @@ async def health_plain(request: web.Request) -> web.Response:
 async def health_json(_request: web.Request) -> web.Response:
     import time
 
-    return web.json_response(
-        {
-            "ok": True,
-            "status": "running",
-            "bot": BOT_NAME,
-            "uptime_seconds": int(time.time() - _STARTED),
-        },
-        headers=_health_headers(),
-    )
+    payload = {
+        "ok": True,
+        "status": "running",
+        "bot": BOT_NAME,
+        "uptime_seconds": int(time.time() - _STARTED),
+    }
+    try:
+        from bot.config import DB_PATH as _DBP
+        from bot.persist import db_status
+
+        payload["db"] = db_status(_DBP)
+    except Exception:
+        pass
+    return web.json_response(payload, headers=_health_headers())
 
 
 def mount_health(app: web.Application) -> None:
@@ -108,21 +114,44 @@ async def serve_http(app: web.Application) -> web.AppRunner:
     return runner
 
 
-async def post_init(app: Application) -> None:
+async def sync_menu_commands(app: Application) -> int:
+    """Register the Maestro-identical side Menu. Retried, multi-scope.
+
+    Telegram clients (esp. iOS) only show the blue Menu button when commands
+    are set for the chat's scope. We set Default + Private + Group so the
+    menu shows everywhere, then force MenuButtonCommands globally.
+    Returns number of scopes successfully set.
+    """
     commands = [BotCommand(name, desc[:256]) for name, desc in BOT_COMMANDS]
-    for scope in (BotCommandScopeDefault(), BotCommandScopeAllPrivateChats()):
-        try:
-            await app.bot.delete_my_commands(scope=scope)
-        except Exception:
-            pass
-        try:
-            await app.bot.set_my_commands(commands, scope=scope)
-        except Exception as exc:
-            log.warning("set_my_commands %s: %s", scope, exc)
+    scopes = (BotCommandScopeDefault(), BotCommandScopeAllPrivateChats(), BotCommandScopeAllGroupChats())
+    ok = 0
+    for scope in scopes:
+        for attempt in range(3):
+            try:
+                await app.bot.set_my_commands(commands, scope=scope)
+                ok += 1
+                break
+            except Exception as exc:
+                log.warning("set_my_commands %s try %d: %s", scope, attempt + 1, exc)
+                await asyncio.sleep(1 + attempt * 2)
+    # verify
     try:
-        await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        got = await app.bot.get_my_commands(scope=BotCommandScopeAllPrivateChats())
+        log.info("menu verify: %d/%d commands live in private scope", len(got), len(commands))
     except Exception as exc:
-        log.warning("set_chat_menu_button: %s", exc)
+        log.warning("menu verify: %s", exc)
+    for attempt in range(3):
+        try:
+            await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+            break
+        except Exception as exc:
+            log.warning("set_chat_menu_button try %d: %s", attempt + 1, exc)
+            await asyncio.sleep(1 + attempt * 2)
+    return ok
+
+
+async def post_init(app: Application) -> None:
+    await sync_menu_commands(app)
     try:
         await app.bot.set_my_description(texts.bot_description()[:512])
         await app.bot.set_my_short_description(
@@ -130,20 +159,46 @@ async def post_init(app: Application) -> None:
         )
     except Exception as exc:
         log.warning("Could not set bot description: %s", exc)
-    log.info("%s commands registered for Menu button", len(commands))
+    log.info("%s commands registered for Menu button", len(BOT_COMMANDS))
     from bot.admin import set_bot
 
     set_bot(app.bot)
     from bot.worker import run as worker_run
 
     async def _worker() -> None:
-        try:
-            await worker_run(app.bot)
-        except Exception:
-            log.exception("background worker crashed")
+        # self-healing: restart worker if it ever crashes
+        backoff = 5
+        while True:
+            try:
+                await worker_run(app.bot)
+                backoff = 5
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("background worker crashed, restart in %ss", backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 120)
 
     asyncio.create_task(_worker())
-    log.info("background worker scheduled")
+    log.info("background worker scheduled (self-healing)")
+
+    # periodic DB backup so restarts/redeploys lose nothing
+    try:
+        from bot.config import DB_PATH as _DBP
+        from bot.persist import backup_loop
+
+        async def _backups() -> None:
+            try:
+                await backup_loop(_DBP, 300)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("backup loop crashed")
+
+        asyncio.create_task(_backups())
+        log.info("DB backup loop scheduled")
+    except Exception as exc:
+        log.warning("backup loop: %s", exc)
 
 
 def build_application() -> Application:
@@ -156,14 +211,20 @@ def build_application() -> Application:
         .build()
     )
     register_command_handlers(application)
-    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    # group=1 so real handlers (incl. /wallets_ETH regex aliases) run first;
+    # unknown_command only fires when nothing else matched.
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_command), group=1)
     application.add_error_handler(on_error)
     return application
 
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not msg:
+    if not msg or not (msg.text or "").startswith("/"):
+        return
+    cmd = (msg.text or "").split()[0].lstrip("/").split("@")[0].lower()
+    # chain aliases are handled by regex handlers; never call them unknown
+    if cmd.startswith("wallets_") or cmd.startswith("quick_"):
         return
     await msg.reply_text(
         "Unknown command. Send /help for the full list, or /start for the main menu."
@@ -236,6 +297,14 @@ async def run_webhook(application: Application) -> None:
         stop = asyncio.Event()
         await stop.wait()
     finally:
+        try:
+            from bot.config import DB_PATH as _DBP
+            from bot.persist import backup_now, checkpoint
+
+            checkpoint(_DBP)
+            backup_now(_DBP)
+        except Exception:
+            pass
         await application.stop()
         await application.shutdown()
         await runner.cleanup()
@@ -258,6 +327,14 @@ async def run_polling_with_health(application: Application) -> None:
         await stop.wait()
     finally:
         try:
+            from bot.config import DB_PATH as _DBP
+            from bot.persist import backup_now, checkpoint
+
+            checkpoint(_DBP)
+            backup_now(_DBP)
+        except Exception:
+            pass
+        try:
             await application.updater.stop()
         except Exception:
             pass
@@ -269,8 +346,20 @@ async def run_polling_with_health(application: Application) -> None:
 def main() -> None:
     from bot.config import DB_PATH as _DB
 
+    try:
+        from bot.persist import ensure_encryption_key, restore_if_needed
+
+        ensure_encryption_key()
+        restore_if_needed(_DB)
+    except Exception as exc:
+        log.warning("persist boot: %s", exc)
     log.info("SQLite (WAL) at %s", _DB)
     db.init_db()
+    try:
+        if not db.integrity_ok():
+            log.warning("SQLite integrity check failed, continuing anyway")
+    except Exception:
+        pass
     try:
         application = build_application()
     except RuntimeError as exc:

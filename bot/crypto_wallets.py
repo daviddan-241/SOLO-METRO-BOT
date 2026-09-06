@@ -13,13 +13,23 @@ Account.enable_unaudited_hdwallet_features()
 
 
 def _fernet() -> Fernet:
-    if ENCRYPTION_KEY:
-        key = ENCRYPTION_KEY.encode() if isinstance(ENCRYPTION_KEY, str) else ENCRYPTION_KEY
-        if len(key) != 44:
-            key = base64.urlsafe_b64encode(hashlib.sha256(key).digest())
-        return Fernet(key)
-    raw = hashlib.sha256((BOT_TOKEN + "|solo-metro-wallets").encode()).digest()
-    return Fernet(base64.urlsafe_b64encode(raw))
+    # persist.ensure_encryption_key() resolves env > file > legacy-derived
+    # and persists to data/.fernet.key so wallets survive restarts/rotations.
+    try:
+        from bot.persist import ensure_encryption_key
+
+        raw = ensure_encryption_key()
+    except Exception:
+        raw = (ENCRYPTION_KEY.encode() if ENCRYPTION_KEY else hashlib.sha256((BOT_TOKEN + "|solo-metro-wallets").encode()).digest())
+        if len(raw) != 44:
+            import base64 as _b64
+
+            raw = _b64.urlsafe_b64encode(hashlib.sha256(raw).digest()) if len(raw) != 32 else _b64.urlsafe_b64encode(raw)
+            return Fernet(raw)
+    key = raw if isinstance(raw, (bytes, bytearray)) else str(raw).encode()
+    if len(key) != 44:
+        key = base64.urlsafe_b64encode(hashlib.sha256(key).digest())
+    return Fernet(key)
 
 
 def encrypt_secret(secret: str) -> str:

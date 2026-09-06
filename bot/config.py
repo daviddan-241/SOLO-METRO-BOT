@@ -36,6 +36,12 @@ ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "").strip()
 
 
 def _pick_db_path() -> str:
+    try:
+        from bot.persist import resolve_db_path
+
+        return resolve_db_path()
+    except Exception:
+        pass
     env = (os.getenv("DB_PATH") or "").strip()
     candidates: list[Path] = []
     if env:

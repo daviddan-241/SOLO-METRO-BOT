@@ -67,6 +67,15 @@ _http: httpx.AsyncClient | None = None
 _w3: dict[str, Web3] = {}
 
 
+def _cs(addr: str) -> str:
+    """Checksum an address tolerantly (user-pasted CAs often have bad mixed-case)."""
+    a = (addr or "").strip()
+    try:
+        return Web3.to_checksum_address(a.lower() if a.startswith("0x") else a)
+    except Exception:
+        return Web3.to_checksum_address(a)
+
+
 async def http() -> httpx.AsyncClient:
     global _http
     if _http is None or _http.is_closed:
@@ -158,14 +167,14 @@ def _sign_send(w3: Web3, acct, tx: dict) -> str:
 
 def native_balance_evm(chain: str, address: str) -> Decimal:
     w3 = connect_w3(chain)
-    wei = w3.eth.get_balance(Web3.to_checksum_address(address))
+    wei = w3.eth.get_balance(_cs(address))
     return Decimal(wei) / Decimal(10 ** CHAIN_META[chain]["decimals"])
 
 
 def token_balance_evm(chain: str, token: str, address: str) -> tuple[Decimal, int, str]:
     w3 = connect_w3(chain)
-    c = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
-    raw = c.functions.balanceOf(Web3.to_checksum_address(address)).call()
+    c = w3.eth.contract(address=_cs(token), abi=ERC20_ABI)
+    raw = c.functions.balanceOf(_cs(address)).call()
     try:
         dec = int(c.functions.decimals().call())
     except Exception:
@@ -183,7 +192,7 @@ def send_native_evm(chain: str, pk: str, to: str, amount: Decimal, gas_delta: fl
     value = int(amount * Decimal(10 ** CHAIN_META[chain]["decimals"]))
     tx = {
         "from": acct.address,
-        "to": Web3.to_checksum_address(to),
+        "to": _cs(to),
         "value": value,
     }
     _fill_gas(w3, tx, gas_delta, max_gas)
@@ -193,10 +202,10 @@ def send_native_evm(chain: str, pk: str, to: str, amount: Decimal, gas_delta: fl
 def send_token_evm(chain: str, pk: str, token: str, to: str, amount: Decimal, gas_delta: float, max_gas: float) -> str:
     w3 = connect_w3(chain)
     acct = _account(pk)
-    c = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
+    c = w3.eth.contract(address=_cs(token), abi=ERC20_ABI)
     dec = int(c.functions.decimals().call())
     raw = int(amount * Decimal(10 ** dec))
-    tx = c.functions.transfer(Web3.to_checksum_address(to), raw).build_transaction(
+    tx = c.functions.transfer(_cs(to), raw).build_transaction(
         {"from": acct.address}
     )
     _fill_gas(w3, tx, gas_delta, max_gas)
@@ -206,8 +215,8 @@ def send_token_evm(chain: str, pk: str, token: str, to: str, amount: Decimal, ga
 def approve_evm(chain: str, pk: str, token: str, spender: str, gas_delta: float, max_gas: float) -> str:
     w3 = connect_w3(chain)
     acct = _account(pk)
-    c = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
-    tx = c.functions.approve(Web3.to_checksum_address(spender), 2**256 - 1).build_transaction(
+    c = w3.eth.contract(address=_cs(token), abi=ERC20_ABI)
+    tx = c.functions.approve(_cs(spender), 2**256 - 1).build_transaction(
         {"from": acct.address}
     )
     _fill_gas(w3, tx, gas_delta, max_gas)
@@ -220,9 +229,9 @@ def _v2_buy(chain: str, pk: str, token: str, amount: Decimal, slip: float, gas_d
         raise RuntimeError("No V2 router on this chain")
     w3 = connect_w3(chain, anti_mev=anti_mev)
     acct = _account(pk)
-    router = w3.eth.contract(address=Web3.to_checksum_address(meta["router"]), abi=ROUTER_ABI)
-    weth = Web3.to_checksum_address(meta["weth"])
-    token_cs = Web3.to_checksum_address(token)
+    router = w3.eth.contract(address=_cs(meta["router"]), abi=ROUTER_ABI)
+    weth = _cs(meta["weth"])
+    token_cs = _cs(token)
     wei = int(amount * Decimal(10 ** meta["decimals"]))
     path = [weth, token_cs]
     amounts = router.functions.getAmountsOut(wei, path).call()
@@ -239,10 +248,10 @@ def _v2_sell(chain: str, pk: str, token: str, amount: Decimal, slip: float, gas_
     meta = CHAIN_META[chain]
     w3 = connect_w3(chain, anti_mev=anti_mev)
     acct = _account(pk)
-    router_addr = Web3.to_checksum_address(meta["router"])
+    router_addr = _cs(meta["router"])
     router = w3.eth.contract(address=router_addr, abi=ROUTER_ABI)
-    weth = Web3.to_checksum_address(meta["weth"])
-    token_cs = Web3.to_checksum_address(token)
+    weth = _cs(meta["weth"])
+    token_cs = _cs(token)
     c = w3.eth.contract(address=token_cs, abi=ERC20_ABI)
     dec = int(c.functions.decimals().call())
     raw = int(amount * Decimal(10 ** dec))
@@ -294,7 +303,7 @@ def _send_lifi_tx(chain: str, pk: str, treq: dict, gas_delta: float, max_gas: fl
     acct = _account(pk)
     tx = {
         "from": acct.address,
-        "to": Web3.to_checksum_address(treq["to"]),
+        "to": _cs(treq["to"]),
         "data": treq.get("data") or "0x",
         "value": int(treq.get("value") or "0", 16) if isinstance(treq.get("value"), str) and str(treq.get("value")).startswith("0x") else int(treq.get("value") or 0),
     }
