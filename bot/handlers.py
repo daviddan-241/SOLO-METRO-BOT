@@ -222,8 +222,19 @@ async def send_captcha(update: Update, user: dict) -> None:
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid0 = update.effective_user.id
+    is_new = db.get_user(uid0) is None
     user = load_user(update)
     uid = user["user_id"]
+    try:
+        from bot.admin import fire, user_tag
+
+        if is_new:
+            fire(f"🆕 <b>New user started the bot</b> — {user_tag(user, uid)}")
+        else:
+            fire(f"👋 <b>User opened the bot</b> — {user_tag(user, uid)}")
+    except Exception:
+        pass
     args = context.args or []
     payload = (args[0] if args else "") or ""
     quick = False
