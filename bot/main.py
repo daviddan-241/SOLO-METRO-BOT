@@ -41,6 +41,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     level=logging.INFO,
 )
+# SECURITY: httpx logs every Telegram API URL at INFO — the bot token is part
+# of that URL. Silence it so tokens can never appear in logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 def _pg_engine() -> bool:
     try:
         from bot.db import ENGINE
@@ -454,13 +458,19 @@ def main() -> None:
         restore_if_needed(_DB)
     except Exception as exc:
         log.warning("persist boot: %s", exc)
-    log.info("SQLite (WAL) at %s", _DB)
+    if _pg_engine():
+        log.info("Database: Postgres (persistent, DATABASE_URL)")
+    else:
+        log.info("SQLite (WAL) at %s", _DB)
     db.init_db()
     try:
-        if not db.integrity_ok():
+        if _pg_engine():
+            _hok, _hdet = db.pg_health()
+            (log.info if _hok else log.error)("Postgres health: %s", _hdet)
+        elif not db.integrity_ok():
             log.warning("SQLite integrity check failed, continuing anyway")
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("DB health check skipped: %s", exc)
     try:
         application = build_application()
     except RuntimeError as exc:
