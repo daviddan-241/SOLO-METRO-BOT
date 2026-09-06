@@ -1564,6 +1564,9 @@ async def handle_token_cb(update, context, user, data, query):
         pct = float(parts[3])
         await _do_sell(query, uid, chain, ca, None, pct)
     elif action == "snipe":
+        if len(db.list_snipes(uid)) >= db.cap(user, "snipe"):
+            await safe_answer(query, db.cap_alert(user, "snipe"), show_alert=True)
+            return
         db.add_snipe(uid, chain, ca, settings_map(uid, chain)["buy_amount"])
         await safe_answer(query, "Auto-snipe armed — fires when liquidity appears")
         await show_snipe(update, user, query)
@@ -1816,6 +1819,10 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if state == "sn_add_ca":
+        if len(db.list_snipes(uid)) >= db.cap(user, "snipe"):
+            await send_panel(update, db.cap_alert(user, "snipe"))
+            db.set_state(uid, None)
+            return
         db.add_snipe(uid, payload["chain"], text.strip(), settings_map(uid, payload["chain"])["buy_amount"])
         db.set_state(uid, None)
         await show_snipe(update, user, None)

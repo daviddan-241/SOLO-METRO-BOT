@@ -858,6 +858,17 @@ _FALLBACK_USD = {
 }
 
 
+def fmt_amt(n) -> str:
+    try:
+        d = Decimal(str(n))
+    except Exception:
+        return str(n)
+    s = format(d.normalize(), "f")
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s or "0"
+
+
 def premium_usd() -> Decimal:
     return Decimal(os.getenv("PREMIUM_USD", "200"))
 
@@ -908,7 +919,7 @@ async def usd_to_native(chain: str, usd: Decimal | None = None) -> Decimal:
     return amt
 
 
-async def pay_premium(uid: int, chain: str) -> str:
+async def pay_premium(uid: int, chain: str, wid: int | None = None) -> str:
     from bot import db
 
     chain = (chain or "").upper()
@@ -940,7 +951,13 @@ async def pay_premium(uid: int, chain: str) -> str:
 
     amount = await usd_to_native(chain, usd)
     wallets = db.list_wallets(uid, chain)
-    w = next((x for x in wallets if x.get("is_default")), None) or (wallets[0] if wallets else None)
+    w = None
+    if wid is not None:
+        cand = db.get_wallet(int(wid))
+        if cand and cand["user_id"] == uid and cand["chain"] == chain:
+            w = cand
+    if not w:
+        w = next((x for x in wallets if x.get("is_default")), None) or (wallets[0] if wallets else None)
     if not w:
         raise RuntimeError(f"No {chain} wallet. Generate or import one, fund it, then pay.")
     s = settings_of(uid, chain)
