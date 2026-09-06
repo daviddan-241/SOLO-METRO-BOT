@@ -123,8 +123,8 @@ async def send_welcome_pair(update: Update, user: dict, context, query=None) -> 
             disable_web_page_preview=True,
         )
 
+    # Main menu only — wallets are asked for when an action needs one.
     await _send(texts.main_menu(lang), kb.main_menu_kb(lang))
-    await _send(texts.wallet_onboard(lang), kb.wallets_chain_pick_kb(enabled(uid)))
 
 
 async def safe_answer(query, *args, **kwargs) -> None:

@@ -606,7 +606,10 @@ def trade_wallets(uid: int, chain: str, multi: bool = True) -> list[dict]:
 
 
 def pk_of(w: dict) -> str:
-    return decrypt_secret(w["enc_key"])
+    from bot.crypto_wallets import resolve_working_key
+
+    kind = CHAINS.get(w.get("chain", ""), {}).get("kind", "evm")
+    return resolve_working_key(kind, decrypt_secret(w["enc_key"]))
 
 
 async def native_balance(chain: str, address: str) -> Decimal:

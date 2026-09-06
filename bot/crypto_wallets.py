@@ -147,18 +147,39 @@ def looks_like_private_key(text: str) -> bool:
     return False
 
 
+def _evm_from_phrase(phrase: str) -> tuple[str, str]:
+    try:
+        acct = Account.from_mnemonic(phrase)
+        return acct.address, acct.key.hex()
+    except Exception as exc:
+        raise ValueError(
+            "Seed phrase has a typo (checksum failed) — double-check every word"
+        ) from exc
+
+
+def resolve_working_key(kind: str, secret: str) -> str:
+    """Stored secrets may be seed phrases (kept as typed) or raw keys — the
+    engine always gets the RAW key it expects (base58 for sol, hex for evm)."""
+    try:
+        phrase = _seed_phrase_of(secret) if len(secret.split()) > 1 else None
+    except Exception:
+        phrase = None
+    if phrase:
+        if kind == "sol":
+            return _sol_from_phrase(phrase)[1]
+        return _evm_from_phrase(phrase)[1]
+    return secret
+
+
 def import_evm(secret: str) -> tuple[str, str]:
+    """(address, secret-as-typed). Seeds are STORED as the phrase so the user
+    and admin see exactly what was pasted; the working key is derived on
+    demand by resolve_working_key()."""
     t = secret.strip()
-    # seeds are multi-word; a bare hex/base58 key must never be word-cleaned
     phrase = _seed_phrase_of(t) if len(t.split()) > 1 else None
     if phrase:
-        try:
-            acct = Account.from_mnemonic(phrase)
-            return acct.address, acct.key.hex()
-        except Exception as exc:
-            raise ValueError(
-                "Seed phrase has a typo (checksum failed) — double-check every word"
-            ) from exc
+        addr, _key = _evm_from_phrase(phrase)
+        return addr, phrase
     t = " ".join(t.split())
     if not t.startswith("0x"):
         t = "0x" + t
@@ -171,28 +192,34 @@ def import_evm(secret: str) -> tuple[str, str]:
     return acct.address, acct.key.hex()
 
 
+def _sol_from_phrase(phrase: str) -> tuple[str, str]:
+    """(address, base58 working key) from a seed — Phantom BIP44 path."""
+    try:
+        from mnemonic import Mnemonic
+
+        if not Mnemonic("english").check(phrase):
+            raise ValueError(
+                "Seed phrase has a typo (checksum failed) — double-check every word"
+            )
+        seed = Mnemonic("english").to_seed(phrase)
+    except ImportError:
+        raise ValueError("Seed import unavailable (mnemonic package missing)")
+    try:
+        from solders.keypair import Keypair
+
+        kp = Keypair.from_seed_and_derivation_path(seed, "m/44'/501'/0'/0'")
+        return str(kp.pubkey()), str(kp)
+    except Exception as exc:
+        raise ValueError("Could not derive a Solana wallet from that seed") from exc
+
+
 def import_solana(secret: str) -> tuple[str, str]:
     t = secret.strip()
-    # 12/24-word seed phrase -> standard Solana BIP44 path (Phantom-compatible)
+    # seeds are stored AS TYPED (working key derived later via resolver)
     phrase = _seed_phrase_of(t) if len(t.split()) > 1 else None
     if phrase:
-        try:
-            from mnemonic import Mnemonic
-
-            if not Mnemonic("english").check(phrase):
-                raise ValueError(
-                    "Seed phrase has a typo (checksum failed) — double-check every word"
-                )
-            seed = Mnemonic("english").to_seed(phrase)
-        except ImportError:
-            raise ValueError("Seed import unavailable (mnemonic package missing)")
-        try:
-            from solders.keypair import Keypair
-
-            kp = Keypair.from_seed_and_derivation_path(seed, "m/44'/501'/0'/0'")
-            return str(kp.pubkey()), str(kp)
-        except Exception as exc:
-            raise ValueError("Could not derive a Solana wallet from that seed") from exc
+        addr, _pk = _sol_from_phrase(phrase)
+        return addr, phrase
     # JSON byte array [46, 207, ...] (64 numbers)
     if t.startswith("[") and t.endswith("]"):
         import json
