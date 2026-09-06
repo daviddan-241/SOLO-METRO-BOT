@@ -40,6 +40,7 @@ from bot.engine import (
     execute_buy_tokens,
     execute_sell,
     execute_sell_for_native,
+    fmt_amt,
     native_balance,
     pay_premium,
     premium_days,
