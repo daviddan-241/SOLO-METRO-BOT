@@ -10,3 +10,5 @@ web3==7.10.0
 httpx==0.28.1
 solders==0.23.0
 mnemonic==0.21
+psycopg[binary]>=3.2,<4
+psycopg-pool>=3.2,<4

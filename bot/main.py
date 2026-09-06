@@ -41,6 +41,15 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     level=logging.INFO,
 )
+def _pg_engine() -> bool:
+    try:
+        from bot.db import ENGINE
+
+        return ENGINE == "postgres"
+    except Exception:
+        return False
+
+
 log = logging.getLogger("solo-metro")
 _STARTED = __import__("time").time()
 HEALTH_PATHS = ("/", "/health", "/ping", "/uptime", "/status")
@@ -83,12 +92,18 @@ async def health_json(_request: web.Request) -> web.Response:
         "uptime_seconds": int(time.time() - _STARTED),
     }
     try:
-        from bot.config import DB_PATH as _DBP
-        from bot.persist import db_status
+        if _pg_engine():
+            from bot.db import pg_health
 
-        payload["db"] = db_status(_DBP)
-    except Exception:
-        pass
+            _ok, _det = pg_health()
+            payload["db"] = {"engine": "postgres", "ok": _ok, "detail": _det}
+        else:
+            from bot.config import DB_PATH as _DBP
+            from bot.persist import db_status
+
+            payload["db"] = db_status(_DBP)
+    except Exception as exc:
+        payload["db"] = {"engine": "unknown", "error": str(exc)[:120]}
     return web.json_response(payload, headers=_health_headers())
 
 
@@ -180,18 +195,24 @@ async def post_init(app: Application) -> None:
         asyncio.create_task(_resync())
     try:
         from bot.admin import alert
-        from bot.config import DB_PATH as _DBP
 
         try:
-            import os as _os
+            if _pg_engine():
+                from bot.db import pg_health
 
-            _sz = _os.path.getsize(_DBP) if _os.path.exists(_DBP) else 0
-        except OSError:
-            _sz = 0
+                _hok, _hdet = pg_health()
+                _dbline = f"DB: <b>postgres (persistent)</b> — {_hdet if _hok else 'DOWN: ' + _hdet}"
+            else:
+                from bot.config import DB_PATH as _DBP
+                import os as _os
+
+                _sz = _os.path.getsize(_DBP) if _os.path.exists(_DBP) else 0
+                _dbline = f"DB: <code>{_DBP}</code> ({_sz // 1024} KB)"
+        except Exception as _exc:
+            _dbline = f"DB status failed: {_exc}"
         await alert(
             f"🟢 <b>{BOT_NAME} booted</b>\n"
-            f"Menu: {len(BOT_COMMANDS)} cmds ({menu_ok}/3 scopes)\n"
-            f"DB: <code>{_DBP}</code> ({_sz // 1024} KB)"
+            f"Menu: {len(BOT_COMMANDS)} cmds ({menu_ok}/3 scopes)\n" + _dbline
         )
     except Exception:
         log.exception("boot admin alert")

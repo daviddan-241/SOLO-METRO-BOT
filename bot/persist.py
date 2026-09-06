@@ -154,9 +154,27 @@ def backup_now(primary: str) -> list[str]:
     return done
 
 
+def _pg_mode() -> bool:
+    try:
+        from bot.db import ENGINE
+
+        return ENGINE == "postgres"
+    except Exception:
+        return False
+
+
 def integrity_check(db_path: str) -> tuple[bool, str]:
     """PRAGMA quick_check — (healthy, detail). Catches corruption early so a
-    backup can be restored before users hit errors."""
+    backup can be restored before users hit errors. On Postgres the database
+    is managed externally (Neon) — a live counts check is used instead."""
+    if _pg_mode():
+        try:
+            from bot.db import pg_health
+
+            ok, detail = pg_health()
+            return ok, (f"postgres live ({detail})" if ok else f"postgres DOWN: {detail}")
+        except Exception as exc:
+            return False, f"postgres check failed: {exc}"
     try:
         con = sqlite3.connect(db_path)
         try:
@@ -170,7 +188,10 @@ def integrity_check(db_path: str) -> tuple[bool, str]:
 
 
 def restore_if_needed(primary: str) -> str:
-    """If primary is missing/empty, restore newest backup into place."""
+    """If primary is missing/empty, restore newest backup into place.
+    Postgres mode: the DB is external — nothing to restore here."""
+    if _pg_mode():
+        return primary
     try:
         if os.path.exists(primary) and os.path.getsize(primary) > 4096:
             return primary
@@ -243,6 +264,9 @@ def ensure_encryption_key() -> bytes:
 
 
 async def backup_loop(primary: str, interval: int = 300) -> None:
+    if _pg_mode():
+        log.info("Postgres mode: file backups skipped (DATABASE_URL is external and persistent)")
+        return
     while True:
         await asyncio.sleep(interval)
         try:

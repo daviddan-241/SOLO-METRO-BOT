@@ -25,9 +25,173 @@ from bot.config import (
 
 _lock = threading.Lock()
 
+# ---------------------------------------------------------------------------
+# DUAL ENGINE: PostgreSQL (free Neon/Supabase via DATABASE_URL) or SQLite.
+# Postgres makes the bot fully persistent across Render restarts/redeploys;
+# SQLite remains the zero-config fallback.
+# ---------------------------------------------------------------------------
+import os as _os
+
+DATABASE_URL = (_os.getenv("DATABASE_URL") or "").strip()
+ENGINE = "postgres" if DATABASE_URL.startswith(("postgres://", "postgresql://")) else "sqlite"
+
+_pg_pool = None
+
+
+def _qmark_to_psql(sql: str) -> str:
+    """SQLite '?' placeholders -> '%s' for psycopg; literal '%' escaped.
+    Quote-aware so '?' inside string literals is left alone."""
+    out = []
+    i = 0
+    in_str = False
+    while i < len(sql):
+        ch = sql[i]
+        if ch == "'" and (i + 1 >= len(sql) or sql[i + 1] != "'"):
+            in_str = not in_str
+            out.append(ch)
+        elif ch == "'" and i + 1 < len(sql) and sql[i + 1] == "'":
+            out.append("''")
+            i += 1
+        elif ch == "%":
+            # psycopg %-formats the WHOLE query (literals included) when
+            # parameters are present — every bare % must be doubled
+            out.append("%%")
+        elif not in_str and ch == "?":
+            out.append("%s")
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _pg_open_pool():
+    """(Re)create the connection pool. Neon free tier drops idle connections —
+    the pool health-checks and reconnects automatically."""
+    global _pg_pool
+    import logging as _logging
+
+    log = _logging.getLogger("solo-metro.db")
+    from psycopg_pool import ConnectionPool
+
+    last = None
+    for attempt in range(5):
+        try:
+            kwargs = dict(
+                min_size=1,
+                max_size=8,
+                max_idle=120,
+                max_lifetime=1800,
+                timeout=25,
+                open=True,
+            )
+            try:
+                kwargs["check"] = ConnectionPool.check_connection
+            except Exception:
+                pass
+            _pg_pool = ConnectionPool(DATABASE_URL, **kwargs)
+            log.info("Postgres pool ready")
+            return
+        except Exception as exc:
+            last = exc
+            log.warning("Postgres pool attempt %d failed: %s", attempt + 1, exc)
+            time.sleep(8)
+    raise RuntimeError(
+        f"Could not connect to DATABASE_URL ({str(last)[:200]}). "
+        "Create a free Postgres at neon.tech and set DATABASE_URL."
+    )
+
+
+class _PgCursor:
+    """psycopg cursor shim exposing sqlite-style .lastrowid (via RETURNING)."""
+
+    def __init__(self, cur, last_id):
+        self._cur = cur
+        self.lastrowid = last_id
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def __iter__(self):
+        return iter(self._cur)
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+
+class _PgConn:
+    """psycopg connection shim: sqlite-style execute(?, params)."""
+
+    def __init__(self, real):
+        self._real = real
+        try:
+            from psycopg.rows import dict_row
+
+            real.row_factory = dict_row
+        except Exception:
+            pass
+
+    def execute(self, sql, params=()):
+        sql2 = _qmark_to_psql(sql)
+        p = tuple(params) if params else None
+        stripped = sql2.strip().lstrip("(").strip().upper()
+        if stripped.startswith("INSERT") and "RETURNING" not in sql2.upper():
+            cur = self._real.execute(sql2 + " RETURNING id", p)
+            try:
+                row = cur.fetchone()
+                last_id = row["id"] if row else None
+            except Exception:
+                last_id = None
+            return _PgCursor(cur, last_id)
+        return _PgCursor(self._real.execute(sql2, p), None)
+
+    def executescript(self, script: str):
+        for stmt in script.split(";"):
+            if stmt.strip():
+                self._real.execute(stmt)
+        return None
+
+    def commit(self):
+        try:
+            self._real.commit()
+        except Exception:
+            pass
+
+    def rollback(self):
+        try:
+            self._real.rollback()
+        except Exception:
+            pass
+
+
+def pg_health() -> tuple[bool, str]:
+    """Simple liveness + counts for boot self-check on Postgres."""
+    try:
+        with connect() as con:
+            u = con.execute("SELECT COUNT(*) AS n FROM users").fetchone()
+            w = con.execute("SELECT COUNT(*) AS n FROM wallets").fetchone()
+            return True, f"users={u['n']} wallets={w['n']}"
+    except Exception as exc:
+        return False, str(exc)[:200]
+
 
 @contextmanager
 def connect():
+    if ENGINE == "postgres":
+        global _pg_pool
+        if _pg_pool is None:
+            _pg_open_pool()
+        try:
+            cm = _pg_pool.connection()
+        except Exception:
+            _pg_open_pool()  # stale pool after a DB restart — rebuild once
+            cm = _pg_pool.connection()
+        with cm as real:
+            yield _PgConn(real)
+        return
     with _lock:
         con = sqlite3.connect(DB_PATH, timeout=30)
         con.row_factory = sqlite3.Row
@@ -45,10 +209,8 @@ def connect():
             con.close()
 
 
-def init_db() -> None:
-    with connect() as con:
-        con.executescript(
-            """
+# schema literal shared by both engines (Postgres swaps AUTOINCREMENT -> IDENTITY)
+_SCHEMA_SQLITE = """
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
@@ -175,21 +337,51 @@ def init_db() -> None:
                 updated_at REAL
             );
             """
-        )
+
+# (table, column, decl) migrations applied on every boot, both engines
+_COLUMN_MIGRATIONS = [
+    ("monitors", "qty", "TEXT"),
+    ("monitors", "cost", "TEXT"),
+    ("users", "premium_until", "REAL DEFAULT 0"),
+    ("users", "cashback", "TEXT DEFAULT '{}'"),
+    ("users", "cashback_lifetime", "TEXT DEFAULT '{}'"),
+    ("users", "fee_credit", "TEXT DEFAULT '{}'"),
+    ("wallets", "sort_order", "INTEGER DEFAULT 0"),
+    ("copytrade", "buy_pct", "TEXT"),
+    ("orders", "last_fire", "REAL DEFAULT 0"),
+]
+
+
+def init_db() -> None:
+    if ENGINE == "postgres":
+        with connect() as con:
+            con.executescript(_SCHEMA_SQLITE.replace(
+                "INTEGER PRIMARY KEY AUTOINCREMENT",
+                "BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY",
+            ))
+
+            def _has_col(table: str, name: str) -> bool:
+                cur = con.execute(
+                    "SELECT COUNT(*) AS n FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?",
+                    (table, name),
+                )
+                return int(cur.fetchone()["n"]) > 0
+
+            for table, name, decl in _COLUMN_MIGRATIONS:
+                if not _has_col(table, name):
+                    con.execute(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {decl}')
+        return
+    with connect() as con:
+        con.executescript(_SCHEMA_SQLITE)
+
         def _col(table: str, name: str, decl: str) -> None:
             existing = {r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
             if name not in existing:
                 con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
-        _col("monitors", "qty", "TEXT")
-        _col("monitors", "cost", "TEXT")
-        _col("users", "premium_until", "REAL DEFAULT 0")
-        _col("users", "cashback", "TEXT DEFAULT '{}'")
-        _col("users", "cashback_lifetime", "TEXT DEFAULT '{}'")
-        _col("users", "fee_credit", "TEXT DEFAULT '{}'")
-        _col("wallets", "sort_order", "INTEGER DEFAULT 0")
-        _col("copytrade", "buy_pct", "TEXT")
-        _col("orders", "last_fire", "REAL DEFAULT 0")
+        for _t, _n, _d in _COLUMN_MIGRATIONS:
+            _col(_t, _n, _d)
         try:
             con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except sqlite3.Error:
@@ -253,7 +445,7 @@ def ensure_user(user_id: int, username: str | None, first_name: str | None) -> d
         )
         for chain in CHAIN_ORDER:
             con.execute(
-                "INSERT OR IGNORE INTO chain_prefs (user_id, chain, enabled) VALUES (?, ?, 1)",
+                "INSERT INTO chain_prefs (user_id, chain, enabled) VALUES (?, ?, 1) ON CONFLICT (user_id, chain) DO NOTHING",
                 (user_id, chain),
             )
         return dict(con.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone())

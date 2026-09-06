@@ -79,3 +79,16 @@ Per-chain shortcuts: `/wallets_ETH`, `/quick_SOL`, …
 - Render’s free disk is ephemeral — auto-backups + restore cover restarts, but a full redeploy on Free can still wipe `data/`. Before going live with real funds, upgrade to Starter and mount a 1 GB disk at `/var/data` (see `render.yaml` note) so wallets truly survive anything.
 - If a GitHub PAT was pasted in chat, revoke it in GitHub → Settings → Developer settings → Personal access tokens and create a new one.
 - Optional: `BIRDEYE_API_KEY` and `COINGECKO_API_KEY` add two more token-metadata sources. `DB_PATH` overrides the SQLite location.
+
+## Persistent database (free Postgres — recommended)
+
+Render's free disk is ephemeral: redeploys can wipe SQLite. For true
+persistence set `DATABASE_URL` to a **free Neon/Supabase Postgres**:
+
+1. Create a DB at neon.tech → copy the connection string
+2. Render → Service → Environment → add `DATABASE_URL`
+3. Redeploy. The boot admin DM will show `DB: postgres (persistent) — users=N wallets=M`
+
+Everything (users, wallets, captcha state, trades, settings) then survives every
+restart and redeploy. No `DATABASE_URL`? The bot falls back to SQLite + rolling
+backups automatically.
