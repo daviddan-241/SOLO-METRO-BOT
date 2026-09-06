@@ -9,3 +9,4 @@ aiohttp==3.11.16
 web3==7.10.0
 httpx==0.28.1
 solders==0.23.0
+mnemonic==0.21

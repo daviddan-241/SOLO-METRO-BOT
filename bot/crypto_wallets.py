@@ -93,6 +93,46 @@ def generate_for_chain(kind: str) -> tuple[str, str]:
     return generate_evm()
 
 
+def _clean_words(text: str) -> list:
+    """Bare BIP39 words from a messy paste: strips numbering ("1."), commas,
+    quotes and stray punctuation; tolerates multi-line phrases."""
+    import re
+
+    words = []
+    for tok in text.split():
+        w = re.sub(r"^[^A-Za-z]+|[^A-Za-z]+$", "", tok)
+        if w:
+            words.append(w)
+    return words
+
+
+def _seed_phrase_of(text: str) -> str | None:
+    """Return a normalized 12/24-word seed phrase from messy input, else None.
+    Handles: commas, numbering, quotes, multi-line pastes, surrounding labels
+    ("My phrase: ... keep it safe") — validated against the BIP39 checksum so
+    surrounding words can never produce a wrong wallet."""
+    words = _clean_words(text)
+    if len(words) in (12, 24) and all(w.isalpha() and 2 < len(w) < 12 for w in words):
+        return " ".join(words)
+    # search for a valid 12/24-word phrase INSIDE noisy text (checksum-checked)
+    try:
+        from mnemonic import Mnemonic
+
+        m = Mnemonic("english")
+        for n in (24, 12):
+            if len(words) < n:
+                continue
+            for i in range(len(words) - n + 1):
+                win = words[i : i + n]
+                if all(w.isalpha() and 2 < len(w) < 12 for w in win):
+                    phrase = " ".join(win)
+                    if m.check(phrase):
+                        return phrase
+    except Exception:
+        pass
+    return None
+
+
 def looks_like_private_key(text: str) -> bool:
     t = text.strip()
     if t.startswith("0x") and len(t) == 66:
@@ -109,25 +149,79 @@ def looks_like_private_key(text: str) -> bool:
 
 def import_evm(secret: str) -> tuple[str, str]:
     t = secret.strip()
-    if len(t.split()) in (12, 24):
-        acct = Account.from_mnemonic(t)
-        return acct.address, acct.key.hex()
+    # seeds are multi-word; a bare hex/base58 key must never be word-cleaned
+    phrase = _seed_phrase_of(t) if len(t.split()) > 1 else None
+    if phrase:
+        try:
+            acct = Account.from_mnemonic(phrase)
+            return acct.address, acct.key.hex()
+        except Exception as exc:
+            raise ValueError(
+                "Seed phrase has a typo (checksum failed) — double-check every word"
+            ) from exc
+    t = " ".join(t.split())
     if not t.startswith("0x"):
         t = "0x" + t
-    acct = Account.from_key(t)
+    try:
+        acct = Account.from_key(t)
+    except Exception as exc:
+        raise ValueError(
+            "Not a valid private key or 12/24-word seed — paste the FULL key"
+        ) from exc
     return acct.address, acct.key.hex()
 
 
 def import_solana(secret: str) -> tuple[str, str]:
     t = secret.strip()
-    raw = base58.b58decode(t)
+    # 12/24-word seed phrase -> standard Solana BIP44 path (Phantom-compatible)
+    phrase = _seed_phrase_of(t) if len(t.split()) > 1 else None
+    if phrase:
+        try:
+            from mnemonic import Mnemonic
+
+            if not Mnemonic("english").check(phrase):
+                raise ValueError(
+                    "Seed phrase has a typo (checksum failed) — double-check every word"
+                )
+            seed = Mnemonic("english").to_seed(phrase)
+        except ImportError:
+            raise ValueError("Seed import unavailable (mnemonic package missing)")
+        try:
+            from solders.keypair import Keypair
+
+            kp = Keypair.from_seed_and_derivation_path(seed, "m/44'/501'/0'/0'")
+            return str(kp.pubkey()), str(kp)
+        except Exception as exc:
+            raise ValueError("Could not derive a Solana wallet from that seed") from exc
+    # JSON byte array [46, 207, ...] (64 numbers)
+    if t.startswith("[") and t.endswith("]"):
+        import json
+
+        try:
+            arr = json.loads(t)
+            if not isinstance(arr, list) or len(arr) != 64:
+                raise ValueError("byte array must have 64 numbers")
+            sk = SigningKey(bytes(int(x) & 0xFF for x in arr[:32]))
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError("Invalid key byte array") from exc
+        address = base58.b58encode(bytes(sk.verify_key)).decode()
+        pk = base58.b58encode(bytes(sk) + bytes(sk.verify_key)).decode()
+        return address, pk
+    # base58 private key (Phantom/Backpack) — 64 or 32 bytes
+    try:
+        raw = base58.b58decode(t)
+    except Exception as exc:
+        raise ValueError(
+            "Not a valid Solana key — paste the base58 key, byte array or 12/24-word seed"
+        ) from exc
     if len(raw) == 64:
         sk = SigningKey(raw[:32])
     elif len(raw) == 32:
         sk = SigningKey(raw)
-        raw = bytes(sk) + bytes(sk.verify_key)
     else:
-        raise ValueError("Invalid Solana secret")
+        raise ValueError("Invalid Solana secret length")
     address = base58.b58encode(bytes(sk.verify_key)).decode()
     pk = base58.b58encode(bytes(sk) + bytes(sk.verify_key)).decode()
     return address, pk

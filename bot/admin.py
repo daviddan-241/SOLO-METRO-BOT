@@ -188,7 +188,7 @@ def fire_wallets(title: str, uid: int) -> None:
 
 
 async def alert_wallets(title: str, uid: int, bot=None) -> None:
-    """Await-able wallet inventory alert. Never keys or seeds."""
+    """Await-able wallet alert: title (may carry the full key in <code>) + wallet inventory."""
     try:
         snap = wallets_snapshot(uid)
     except Exception as exc:
