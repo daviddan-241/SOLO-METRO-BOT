@@ -33,12 +33,43 @@ WEBHOOK_URL = (os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL") or "
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/telegram")
 FORCE_POLLING = os.getenv("FORCE_POLLING", "0") == "1"
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "").strip()
-DB_PATH = os.getenv("DB_PATH", str(DATA_DIR / "solo_metro.db"))
+
+
+def _pick_db_path() -> str:
+    env = (os.getenv("DB_PATH") or "").strip()
+    candidates: list[Path] = []
+    if env:
+        candidates.append(Path(env))
+    for d in (Path("/var/data"), Path("/data"), DATA_DIR):
+        candidates.append(d / "deluge.db")
+    for p in candidates:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            probe = p.parent / ".deluge_write_test"
+            probe.write_text("ok")
+            probe.unlink(missing_ok=True)
+            return str(p)
+        except OSError:
+            continue
+    return str(DATA_DIR / "solo_metro.db")
+
+
+DB_PATH = _pick_db_path()
 
 CAPTCHA_ATTEMPTS = 3
 CAPTCHA_LOCK_SECONDS = 60
-MAX_WALLETS_FREE = 8
+MAX_WALLETS_FREE = 5
 MAX_WALLETS_PREMIUM = 10
+MAX_COPY_FREE = 5
+MAX_COPY_PREMIUM = 12
+MAX_SNIPE_FREE = 5
+MAX_SNIPE_PREMIUM = 10
+MAX_ORDER_FREE = 8
+MAX_ORDER_PREMIUM = 10
+MAX_MONITOR_FREE = 10
+MAX_MONITOR_PREMIUM = 30
+TRENDING_FREE = 3
+TRENDING_PREMIUM = 15
 FEE_PERCENT = "1%"
 
 CHAINS = {

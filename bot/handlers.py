@@ -126,6 +126,16 @@ def settings_map(uid: int, chain: str) -> dict:
     return {k: db.get_setting(uid, chain, k, d) for k, d in keys.items()}
 
 
+def track_ok(user: dict, uid: int, chain: str, ca: str) -> bool:
+    mons = db.list_monitors(uid)
+    if any(m.get("chain") == chain and m.get("token") == ca for m in mons):
+        return True
+    if len(mons) >= db.cap(user, "monitors"):
+        return False
+    db.add_monitor(uid, chain, ca)
+    return True
+
+
 def guess_chain(ca: str, uid: int) -> str:
     chains = enabled(uid)
     if EVM_CA.match(ca):
@@ -167,7 +177,7 @@ async def auto_generate_core(uid: int, chains: list[str] | None = None) -> str:
     for chain in chains or ["SOL", "ETH", "BSC", "BASE"]:
         if db.list_wallets(uid, chain):
             continue
-        if db.wallet_count(uid, chain) >= 8:
+        if db.wallet_count(uid, chain) >= 10:
             continue
         address, secret = generate_for_chain(CHAINS[chain]["kind"])
         db.add_wallet(uid, chain, "W1", address, encrypt_secret(secret))
@@ -456,9 +466,9 @@ async def cmd_trending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = load_user(update)
     if not await require_auth(update, user):
         return
-    body = await trending_text()
-    if not user.get("premium"):
-        body += "\n\n⭐ Full live scanner is marked Premium in Maestro; this snapshot is still shown so you can paste any CA."
+    body = await trending_text(db.cap(user, "trending"))
+    if not db.is_premium(user):
+        body += "\n\n⭐ Full trending list is Premium. Free shows a short snapshot — /premium to unlock."
     await send_panel(update, body, kb.back_main())
 
 
@@ -790,7 +800,7 @@ async def show_copy(update, user, query):
     body = (
         "👫 <b>Copytrade</b>\n\n"
         "Copy the buys and sells of tracked wallets at speed. "
-        "Standard: 3 wallets. Premium: 10.\n\n"
+        "Free: 5 wallets. Premium: 12.\n\n"
     )
     if not items:
         body += "No copytrade wallets yet. Tap ➕ Add Wallet to Copy."
@@ -824,7 +834,23 @@ async def show_signals(update, user, query):
 
 
 async def show_token(update, user, chain: str, ca: str, mode: str, query):
-    info = await resolve_token(ca, chain)
+    try:
+        info = await resolve_token(ca, chain)
+    except Exception:
+        info = {
+            "ok": True,
+            "ca": ca,
+            "chain": chain,
+            "symbol": "TOKEN",
+            "name": "Token",
+            "price": 0,
+            "mc": 0,
+            "liq": 0,
+            "change": 0,
+            "dex": "—",
+            "pair_url": "",
+            "warning": "Lookup incomplete — CA is loaded so you can still trade.",
+        }
     chain = info.get("chain") or chain
     ca = info.get("ca") or ca
     tax = {}
@@ -1337,36 +1363,41 @@ async def _dispatch_callback(update, context, query) -> None:
     elif data.startswith("br:"):
         await show_bridge(update, user, query, data.split(":")[1])
     elif data.startswith("prex:"):
-        chain = data.split(":")[1].upper()
+        parts = data.split(":")
+        chain = parts[1].upper()
+        wid = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
         try:
-            msg = await pay_premium(uid, chain)
+            msg = await pay_premium(uid, chain, wid)
             await safe_edit(query, msg, kb.premium_kb())
         except Exception as exc:
             await safe_edit(query, f"❌ {html.escape(str(exc)[:400])}", kb.premium_kb())
+    elif data.startswith("prep:"):
+        parts = data.split(":")
+        chain = parts[1].upper()
+        w = db.get_wallet(int(parts[2]))
+        if not w or w["user_id"] != uid or w["chain"] != chain:
+            await query.message.reply_text("ℹ️ Wallet not found. Do /chains and follow the prompts.")
+            await query.message.reply_text("⚠️ You need to select at least one wallet!")
+            return
+        await show_premium_confirm(update, user, query, chain, w)
     elif data.startswith("pre:"):
         chain = data.split(":")[1].upper()
         if chain not in CHAINS:
             await safe_answer(query, "Unknown chain", show_alert=True)
             return
-        dest = premium_dest(chain)
-        usd = premium_usd()
-        days = premium_days()
-        native = CHAINS[chain]["native"]
-        try:
-            amt = await usd_to_native(chain, usd)
-        except Exception as exc:
-            await safe_edit(query, f"❌ {html.escape(str(exc)[:400])}", kb.premium_kb())
+        wallets = db.list_wallets(uid, chain)
+        if not wallets:
+            await query.message.reply_text("ℹ️ Wallet not found. Do /chains and follow the prompts.")
+            await query.message.reply_text("⚠️ You need to select at least one wallet!")
             return
-        dest_line = f"<code>{html.escape(dest)}</code>" if dest else "set FEE_EVM_ADDRESS / FEE_SOL_ADDRESS"
-        await safe_edit(
-            query,
-            f"🛒 Pay <b>${usd}</b> for {days} days Premium.\n\n"
-            f"Pay in <b>${native} ({chain})</b>\n"
-            f"Amount: <b>{amt} {native}</b>\n"
-            f"To: {dest_line}\n\n"
-            f"Sent from your default {chain} wallet. Fund it first.",
-            kb.confirm_kb(f"prex:{chain}", "nav:premium"),
-        )
+        if len(wallets) > 1:
+            await safe_edit(
+                query,
+                f"💳 Select a <b>{chain}</b> wallet to pay Premium from.",
+                kb.premium_wallet_kb(chain, wallets),
+            )
+            return
+        await show_premium_confirm(update, user, query, chain, wallets[0])
     elif data == "cash:claim":
         moved = db.claim_cashback(uid)
         if not moved:
@@ -1434,7 +1465,7 @@ async def _do_buy(query, uid, chain, ca, amt: Decimal):
     multi = db.get_setting(uid, chain, "multi_buy", "1") in ("1", "true", "on")
     try:
         res = await execute_buy(uid, chain, ca, amt, multi=multi)
-        db.add_monitor(uid, chain, ca)
+        track_ok(db.get_user(uid) or {}, uid, chain, ca)
         await safe_edit(
             query,
             f"🛒 <b>Buy {amt} {CHAINS[chain]['native']}</b>\n<code>{html.escape(ca)}</code>\n\n" + "\n".join(res),
@@ -1473,7 +1504,9 @@ async def handle_token_cb(update, context, user, data, query):
     elif action == "buy" and (len(parts) < 4 or parts[3] == "menu"):
         await show_token(update, user, chain, ca, "buy", query)
     elif action == "track":
-        db.add_monitor(uid, chain, ca)
+        if not track_ok(user, uid, chain, ca):
+            await safe_answer(query, db.cap_alert(user, "monitors"), show_alert=True)
+            return
         await show_token(update, user, chain, ca, "buy", query)
         await safe_answer(query, "Tracking")
     elif action == "cycle":
@@ -1522,7 +1555,7 @@ async def handle_token_cb(update, context, user, data, query):
         await safe_answer(query, "Ape max…")
         try:
             res = await ape_max(uid, chain, ca)
-            db.add_monitor(uid, chain, ca)
+            track_ok(user, uid, chain, ca)
             await safe_edit(query, "🦍 <b>Ape Max</b>\n" + "\n".join(res), kb.token_buy_kb(chain, ca))
         except Exception as exc:
             await safe_edit(query, f"❌ {html.escape(str(exc))}", kb.token_buy_kb(chain, ca))
@@ -1616,6 +1649,9 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         chain = chain or guess_chain(token, uid)
         amt = amt or settings_map(uid, chain)["buy_amount"]
+        if len(db.list_snipes(uid)) >= db.cap(user, "snipe"):
+            await send_panel(update, db.cap_alert(user, "snipe"))
+            return
         db.add_snipe(uid, chain, token, amt)
         db.set_state(uid, None)
         await send_panel(
@@ -1635,6 +1671,9 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await send_panel(update, "Unknown chain. Example: ETH 0xabc... 0.05 60")
             return
         token = extract_ca(parts[1]) or parts[1]
+        if len(db.list_orders(uid)) >= db.cap(user, "orders"):
+            await send_panel(update, db.cap_alert(user, "orders"))
+            return
         db.add_order(uid, chain, token, "buy", "dca", parts[3], parts[2])
         db.set_state(uid, None)
         await send_panel(
@@ -1753,6 +1792,10 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if state == "ct_add_addr":
         chain = payload["chain"]
+        if len(db.list_copytrade(uid)) >= db.cap(user, "copy"):
+            await send_panel(update, db.cap_alert(user, "copy"))
+            db.set_state(uid, None)
+            return
         label = f"W{len(db.list_copytrade(uid, chain))+1}"
         db.add_copytrade(uid, chain, label, text.strip(), settings_map(uid, chain)["buy_amount"])
         db.set_state(uid, None)
@@ -1778,6 +1821,10 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if state == "or_add":
+        if len(db.list_orders(uid)) >= db.cap(user, "orders"):
+            await send_panel(update, db.cap_alert(user, "orders"))
+            db.set_state(uid, None)
+            return
         parts = text.split()
         side = payload.get("side", "buy")
         if payload.get("ca") and len(parts) >= 2:
@@ -1860,11 +1907,11 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             if action == "buyx":
                 res = await execute_buy(uid, chain, ca, Decimal(text), multi=True)
-                db.add_monitor(uid, chain, ca)
+                track_ok(user, uid, chain, ca)
                 await send_panel(update, "🛒 Buy\n" + "\n".join(res), kb.token_buy_kb(chain, ca))
             elif action == "buyt":
                 res = await execute_buy_tokens(uid, chain, ca, Decimal(text))
-                db.add_monitor(uid, chain, ca)
+                track_ok(user, uid, chain, ca)
                 await send_panel(update, "🛒 Buy X tokens\n" + "\n".join(res), kb.token_buy_kb(chain, ca))
             elif action == "sellx":
                 res = await execute_sell(uid, chain, ca, None, float(text.replace("%", "")), multi=True)

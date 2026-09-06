@@ -6,7 +6,22 @@ import secrets
 from contextlib import contextmanager
 from typing import Any, Optional
 
-from bot.config import DB_PATH, CHAIN_ORDER, MAX_WALLETS_FREE, MAX_WALLETS_PREMIUM
+from bot.config import (
+    CHAIN_ORDER,
+    DB_PATH,
+    MAX_COPY_FREE,
+    MAX_COPY_PREMIUM,
+    MAX_MONITOR_FREE,
+    MAX_MONITOR_PREMIUM,
+    MAX_ORDER_FREE,
+    MAX_ORDER_PREMIUM,
+    MAX_SNIPE_FREE,
+    MAX_SNIPE_PREMIUM,
+    MAX_WALLETS_FREE,
+    MAX_WALLETS_PREMIUM,
+    TRENDING_FREE,
+    TRENDING_PREMIUM,
+)
 
 _lock = threading.Lock()
 
@@ -16,9 +31,16 @@ def connect():
     with _lock:
         con = sqlite3.connect(DB_PATH, timeout=30)
         con.row_factory = sqlite3.Row
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA synchronous=NORMAL")
+        con.execute("PRAGMA busy_timeout=8000")
+        con.execute("PRAGMA foreign_keys=ON")
         try:
             yield con
             con.commit()
+        except Exception:
+            con.rollback()
+            raise
         finally:
             con.close()
 
@@ -155,6 +177,47 @@ def init_db() -> None:
         _col("wallets", "sort_order", "INTEGER DEFAULT 0")
         _col("copytrade", "buy_pct", "TEXT")
         _col("orders", "last_fire", "REAL DEFAULT 0")
+        try:
+            con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
+
+
+def is_premium(user: dict | None) -> bool:
+    if not user:
+        return False
+    until = float(user.get("premium_until") or 0)
+    return bool(user.get("premium")) and until > time.time()
+
+
+def cap(user: dict | None, kind: str) -> int:
+    p = is_premium(user)
+    table = {
+        "wallets": (MAX_WALLETS_FREE, MAX_WALLETS_PREMIUM),
+        "copy": (MAX_COPY_FREE, MAX_COPY_PREMIUM),
+        "snipe": (MAX_SNIPE_FREE, MAX_SNIPE_PREMIUM),
+        "orders": (MAX_ORDER_FREE, MAX_ORDER_PREMIUM),
+        "monitors": (MAX_MONITOR_FREE, MAX_MONITOR_PREMIUM),
+        "trending": (TRENDING_FREE, TRENDING_PREMIUM),
+    }
+    lo, hi = table.get(kind, (1, 1))
+    return hi if p else lo
+
+
+def cap_alert(user: dict | None, kind: str) -> str:
+    labels = {
+        "wallets": "wallets per chain",
+        "copy": "copytrade wallets",
+        "snipe": "concurrent snipes",
+        "orders": "limit orders",
+        "monitors": "trade monitors",
+    }
+    free_n = cap({"premium": 0, "premium_until": 0}, kind)
+    prem_n = cap({"premium": 1, "premium_until": time.time() + 10}, kind)
+    return (
+        f"⭐ Free plan allows {free_n} {labels.get(kind, kind)}. "
+        f"Premium unlocks {prem_n}. Open /premium to upgrade."
+    )
 
 
 def ensure_user(user_id: int, username: str | None, first_name: str | None) -> dict:
@@ -354,7 +417,7 @@ def wallet_count(user_id: int, chain: str) -> int:
 
 
 def max_wallets(user: dict) -> int:
-    return MAX_WALLETS_PREMIUM if user.get("premium") else MAX_WALLETS_FREE
+    return cap(user, "wallets")
 
 
 def add_wallet(

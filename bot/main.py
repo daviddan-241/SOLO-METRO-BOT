@@ -4,7 +4,13 @@ import os
 import sys
 
 from aiohttp import web
-from telegram import BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeDefault, Update
+from telegram import (
+    BotCommand,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeDefault,
+    MenuButtonCommands,
+    Update,
+)
 from telegram.ext import (
     Application,
     ContextTypes,
@@ -103,12 +109,20 @@ async def serve_http(app: web.Application) -> web.AppRunner:
 
 
 async def post_init(app: Application) -> None:
-    commands = [BotCommand(name, desc) for name, desc in BOT_COMMANDS]
-    await app.bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    commands = [BotCommand(name, desc[:256]) for name, desc in BOT_COMMANDS]
+    for scope in (BotCommandScopeDefault(), BotCommandScopeAllPrivateChats()):
+        try:
+            await app.bot.delete_my_commands(scope=scope)
+        except Exception:
+            pass
+        try:
+            await app.bot.set_my_commands(commands, scope=scope)
+        except Exception as exc:
+            log.warning("set_my_commands %s: %s", scope, exc)
     try:
-        await app.bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
+        await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     except Exception as exc:
-        log.warning("Could not set private-chat commands: %s", exc)
+        log.warning("set_chat_menu_button: %s", exc)
     try:
         await app.bot.set_my_description(texts.bot_description()[:512])
         await app.bot.set_my_short_description(
@@ -116,7 +130,7 @@ async def post_init(app: Application) -> None:
         )
     except Exception as exc:
         log.warning("Could not set bot description: %s", exc)
-    log.info("%s commands registered", len(commands))
+    log.info("%s commands registered for Menu button", len(commands))
     from bot.admin import set_bot
 
     set_bot(app.bot)
@@ -253,6 +267,9 @@ async def run_polling_with_health(application: Application) -> None:
 
 
 def main() -> None:
+    from bot.config import DB_PATH as _DB
+
+    log.info("SQLite (WAL) at %s", _DB)
     db.init_db()
     try:
         application = build_application()
