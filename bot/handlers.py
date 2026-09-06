@@ -274,25 +274,13 @@ async def handle_captcha_answer(update: Update, user: dict) -> bool:
     expected = (user.get("captcha_text") or "").strip()
     if guess and expected and guess.lower() == expected.lower():
         db.update_user(uid, verified=1, captcha_text=None, captcha_attempts=0, captcha_lock_until=0, tos_accepted=1)
-        db.set_state(uid, None)
+        db.set_state(uid, "await_onboard")
+        # 1) first message: welcome + Continue (menu & wallet prompt follow on tap)
         await msg.reply_text(
             texts.authorized(lang_of(user)),
             parse_mode=HTML,
-            reply_markup=kb.authorized_kb(),
+            reply_markup=kb.onboard_kb(),
             disable_web_page_preview=True,
-        )
-        await msg.reply_text(
-            texts.main_menu(lang_of(user)),
-            parse_mode=HTML,
-            reply_markup=kb.main_menu_kb(lang_of(user)),
-            disable_web_page_preview=True,
-        )
-        await msg.reply_text(
-            "💳 <b>Import or generate a wallet before you trade.</b>\n\n"
-            "Never import your main wallet. Generate a fresh W1, save the key offline, then fund it.\n"
-            "Select a chain:",
-            parse_mode=HTML,
-            reply_markup=kb.wallets_chain_pick_kb(enabled(uid)),
         )
         try:
             from bot.admin import fire, user_tag
@@ -949,6 +937,23 @@ async def _dispatch_callback(update, context, query) -> None:
         await safe_answer(query, "Complete the captcha first. Send /start.", show_alert=True)
         return
 
+    if data == "nav:onboard":
+        # 2) tap Continue: welcome → main menu, then the wallet prompt.
+        db.set_state(uid, None)
+        await show_main(update, user, query)
+        try:
+            await context.bot.send_message(
+                uid,
+                "💳 <b>Import or generate a wallet before you trade.</b>\n\n"
+                "Never import your main wallet. Generate a fresh W1, save the key offline, then fund it.\n"
+                "Select a chain:",
+                parse_mode=HTML,
+                reply_markup=kb.wallets_chain_pick_kb(enabled(uid)),
+                disable_web_page_preview=True,
+            )
+        except Exception as exc:
+            log.warning("onboard wallet prompt send failed: %s", exc)
+        return
     if data == "nav:main":
         await show_main(update, user, query)
     elif data == "nav:chains":
