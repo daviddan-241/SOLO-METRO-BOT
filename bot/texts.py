@@ -47,19 +47,32 @@ def authorized(lang: str) -> str:
     return t(
         lang,
         f"✅ You are now authorized to access the bot!\n\n"
-        f"To summon the main menu, send /start.\n\n"
+        f"Tap <b>▶️ Continue</b> below to open the main menu.\n"
+        f"You can also send /start anytime to summon it.\n\n"
         f"💵 Successful transactions through the {BOT_NAME} are charged a {FEE_PERCENT} tax on every successful buy and sell. Simple transfers are <u>NOT</u> taxed.\n\n"
         f"📚 You can find a thorough documentation for all the features we provide <a href=\"{DOCS_URL}\">here</a>.\n\n"
         f"📢 Join the <a href=\"{HUB_URL}\">Hub</a> and <a href=\"{UPDATES_URL}\">Updates</a> channels and follow us on <a href=\"{TWITTER_URL}\">X (Twitter)</a> to stay up to date with the latest {BOT_NAME} news.\n\n"
         f"🆘 Need help? Our <a href=\"{SUPPORT_URL}\">Support</a> is available to assist you 24/7.\n\n"
         f"By proceeding to use the bot, you <b>confirm</b> that you have read and agreed to our <a href=\"{TOS_URL}\">Terms of Service</a>.",
         f"✅ 你已获得机器人访问权限！\n\n"
-        f"发送 /start 打开主菜单。\n\n"
+        f"点下方 <b>▶️ Continue</b> 打开主菜单，也可随时发送 /start。\n\n"
         f"💵 通过 {BOT_NAME} 成功买入/卖出将收取 {FEE_PERCENT} 税费。普通转账<u>不</u>收费。\n\n"
         f"📚 完整功能文档见 <a href=\"{DOCS_URL}\">这里</a>。\n\n"
         f"📢 加入 <a href=\"{HUB_URL}\">Hub</a> 和 <a href=\"{UPDATES_URL}\">Updates</a>，并关注 <a href=\"{TWITTER_URL}\">X (Twitter)</a> 获取最新消息。\n\n"
         f"🆘 需要帮助？<a href=\"{SUPPORT_URL}\">客服</a> 全天 24/7 在线。\n\n"
         f"继续使用即表示你已阅读并同意 <a href=\"{TOS_URL}\">服务条款</a>。",
+    )
+
+
+def wallet_onboard(lang: str) -> str:
+    return t(
+        lang,
+        "💳 <b>Import or generate a wallet before you trade.</b>\n\n"
+        "Never import your main wallet. Generate a fresh W1, save the key offline, then fund it.\n"
+        "Select a chain:",
+        "💳 <b>交易前请先导入或生成钱包。</b>\n\n"
+        "不要导入主钱包。生成新的 W1，离线保存私钥，然后充值。\n"
+        "选择一条链：",
     )
 
 

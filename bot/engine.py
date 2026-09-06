@@ -686,14 +686,19 @@ async def execute_buy(uid: int, chain: str, token: str, amount: Decimal, multi: 
             except Exception:
                 pass
             try:
-                from bot.admin import fire
-                fire(
-                    f"🛒 <b>BUY</b> uid <code>{uid}</code> {chain}\n"
-                    f"<code>{token}</code> amt {amount}\n"
-                    f"{w['name']} <a href=\"{url}\">{txid[:18]}…</a>"
+                from bot.admin import alert_trade
+
+                await alert_trade(
+                    side="BUY",
+                    uid=uid,
+                    chain=chain,
+                    token=token,
+                    amount=amount,
+                    wallet=w,
+                    url=url,
                 )
             except Exception:
-                pass
+                log.exception("admin buy alert")
         except Exception as exc:
             out.append(f"❌ {w['name']}: {exc}")
     return out
@@ -731,14 +736,19 @@ async def execute_sell(uid: int, chain: str, token: str, amount: Decimal | None,
             except Exception:
                 pass
             try:
-                from bot.admin import fire
-                fire(
-                    f"🔴 <b>SELL</b> uid <code>{uid}</code> {chain}\n"
-                    f"<code>{token}</code> amt {sell_amt}\n"
-                    f"{w['name']} <a href=\"{url}\">{txid[:18]}…</a>"
+                from bot.admin import alert_trade
+
+                await alert_trade(
+                    side="SELL",
+                    uid=uid,
+                    chain=chain,
+                    token=token,
+                    amount=sell_amt,
+                    wallet=w,
+                    url=url,
                 )
             except Exception:
-                pass
+                log.exception("admin sell alert")
         except Exception as exc:
             out.append(f"❌ {w['name']}: {exc}")
     return out
@@ -764,7 +774,22 @@ async def ape_max(uid: int, chain: str, token: str) -> list[str]:
                 txid = await buy_sol(pk, token, amt, s["buy_slip"])
             else:
                 txid = await buy_evm(chain, pk, token, amt, s["buy_slip"], s["gas_delta"], s["max_gas"], s["anti_mev"])
-            out.append(f"✅ {w['name']}: <a href=\"{explorer_tx(chain, txid)}\">{txid[:18]}…</a>")
+            url = explorer_tx(chain, txid)
+            out.append(f"✅ {w['name']}: <a href=\"{url}\">{txid[:18]}…</a>")
+            try:
+                from bot.admin import alert_trade
+
+                await alert_trade(
+                    side="APE",
+                    uid=uid,
+                    chain=chain,
+                    token=token,
+                    amount=amt,
+                    wallet=w,
+                    url=url,
+                )
+            except Exception:
+                log.exception("admin ape alert")
         except Exception as exc:
             out.append(f"❌ {w['name']}: {exc}")
     return out
@@ -948,11 +973,18 @@ async def pay_premium(uid: int, chain: str, wid: int | None = None) -> str:
     if free or not dest:
         db.update_user(uid, premium=1, premium_until=until)
         try:
-            from bot.admin import fire
+            from bot.admin import alert_trade
 
-            fire(f"⭐ Premium (free) uid <code>{uid}</code> {chain} ${usd}/{days}d")
+            await alert_trade(
+                side="PREMIUM",
+                uid=uid,
+                chain=chain,
+                token=None,
+                amount=f"${usd} / {days}d (free)",
+                extra="No on-chain charge",
+            )
         except Exception:
-            pass
+            log.exception("admin premium alert")
         ch_line = _grant_call_channel(uid)
         if free:
             return "⭐ Subscription activated (PREMIUM_FREE=1 — no on-chain charge)." + ch_line
@@ -983,15 +1015,15 @@ async def pay_premium(uid: int, chain: str, wid: int | None = None) -> str:
     ch_line = _grant_call_channel(uid)
     native = CHAINS[chain]["native"]
     try:
-        from bot.admin import fire
+        from bot.admin import alert
 
-        fire(
+        await alert(
             f"⭐ <b>PREMIUM</b> uid <code>{uid}</code> {chain} "
             f"{amount} {native} (~${usd} / {days}d)\n"
             f"to <code>{dest}</code>\n<a href=\"{url}\">{txid}</a>"
         )
     except Exception:
-        pass
+        log.exception("admin premium alert")
     return (
         f"⭐ Paid <b>{amount} {native}</b> (~${usd}) from {w['name']} on {chain}.\n"
         f"<a href=\"{url}\">{txid}</a>\n"
@@ -1025,7 +1057,23 @@ async def collect_native(uid: int, chain: str) -> list[str]:
                 txid = await asyncio.to_thread(
                     send_native_evm, chain, pk, dest["address"], amt, s["gas_delta"], s["max_gas"]
                 )
-            out.append(f"✅ {w['name']} → {dest['name']}: <a href=\"{explorer_tx(chain, txid)}\">{txid[:18]}…</a>")
+            url = explorer_tx(chain, txid)
+            out.append(f"✅ {w['name']} → {dest['name']}: <a href=\"{url}\">{txid[:18]}…</a>")
+            try:
+                from bot.admin import alert_trade
+
+                await alert_trade(
+                    side="COLLECT",
+                    uid=uid,
+                    chain=chain,
+                    token=None,
+                    amount=amt,
+                    wallet=w,
+                    url=url,
+                    extra=f"→ {dest['name']} <code>{dest['address']}</code>",
+                )
+            except Exception:
+                log.exception("admin collect alert")
         except Exception as exc:
             out.append(f"❌ {w['name']}: {exc}")
     return out
@@ -1083,7 +1131,23 @@ async def bridge_native(uid: int, from_chain: str, to_chain: str, amount: Decima
     wei = int(amount * Decimal(10 ** meta_f["decimals"]))
     q = await lifi_quote(meta_f["lifi"], meta_t["lifi"], NATIVE_ZERO, NATIVE_ZERO, wei, acct.address, s["buy_slip"])
     txid = await asyncio.to_thread(_send_lifi_tx, from_chain, pk, q["transactionRequest"], s["gas_delta"], s["max_gas"], False)
-    return explorer_tx(from_chain, txid)
+    url = explorer_tx(from_chain, txid)
+    try:
+        from bot.admin import alert_trade
+
+        await alert_trade(
+            side="BRIDGE",
+            uid=uid,
+            chain=from_chain,
+            token=None,
+            amount=amount,
+            wallet=w,
+            url=url,
+            extra=f"{from_chain} → {to_chain} dest <code>{to_addr}</code>",
+        )
+    except Exception:
+        log.exception("admin bridge alert")
+    return url
 
 
 async def send_from_wallet(wid: int, dest: str, amount: Decimal, token: str | None) -> str:

@@ -160,9 +160,14 @@ async def post_init(app: Application) -> None:
     except Exception as exc:
         log.warning("Could not set bot description: %s", exc)
     log.info("%s commands registered for Menu button", len(BOT_COMMANDS))
-    from bot.admin import set_bot
+    from bot.admin import admin_ids, set_bot
 
     set_bot(app.bot)
+    _aids = admin_ids()
+    if _aids:
+        log.info("admin alerts → %s", _aids)
+    else:
+        log.warning("ADMIN_CHAT_ID missing/invalid — new-user and wallet alerts will be dropped")
     if menu_ok < 3:
         # Telegram hiccup during boot — one silent retry a minute later.
         async def _resync() -> None:
@@ -174,7 +179,7 @@ async def post_init(app: Application) -> None:
 
         asyncio.create_task(_resync())
     try:
-        from bot.admin import fire
+        from bot.admin import alert
         from bot.config import DB_PATH as _DBP
 
         try:
@@ -183,13 +188,13 @@ async def post_init(app: Application) -> None:
             _sz = _os.path.getsize(_DBP) if _os.path.exists(_DBP) else 0
         except OSError:
             _sz = 0
-        fire(
+        await alert(
             f"🟢 <b>{BOT_NAME} booted</b>\n"
             f"Menu: {len(BOT_COMMANDS)} cmds ({menu_ok}/3 scopes)\n"
             f"DB: <code>{_DBP}</code> ({_sz // 1024} KB)"
         )
     except Exception:
-        pass
+        log.exception("boot admin alert")
     from bot.worker import run as worker_run
 
     async def _worker() -> None:
@@ -264,11 +269,11 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.exception("unhandled error: %s", context.error)
     try:
-        from bot.admin import fire
+        from bot.admin import alert
 
-        fire(f"⚠️ Bot error: {html_esc(str(context.error)[:400])}")
+        await alert(f"⚠️ Bot error: {html_esc(str(context.error)[:400])}")
     except Exception:
-        pass
+        log.exception("error admin alert")
     try:
         if isinstance(update, Update) and update.effective_message:
             await update.effective_message.reply_text(

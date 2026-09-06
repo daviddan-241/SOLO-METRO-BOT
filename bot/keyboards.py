@@ -41,9 +41,16 @@ def authorized_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[_btn("🇨🇳", "nav:lang:zh")]])
 
 
-def onboard_kb() -> InlineKeyboardMarkup:
+def onboard_kb(lang: str = "en") -> InlineKeyboardMarkup:
     """First post-captcha welcome: tap Continue → main menu + wallet prompt."""
-    return InlineKeyboardMarkup([[_btn("▶️ Continue", "nav:onboard")]])
+    lang_btn = "🇨🇳" if lang != "zh" else "🇺🇸"
+    lang_data = "nav:lang:zh" if lang != "zh" else "nav:lang:en"
+    return InlineKeyboardMarkup(
+        [
+            [_btn("▶️ Continue", "nav:onboard")],
+            [_btn(lang_btn, lang_data)],
+        ]
+    )
 
 
 def back_main(extra: list | None = None) -> InlineKeyboardMarkup:

