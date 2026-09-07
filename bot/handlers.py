@@ -229,13 +229,24 @@ def is_contract(text: str) -> bool:
 
 
 def extract_ca(text: str) -> str | None:
-    m = re.search(r"0x[a-fA-F0-9]{40}", text or "")
+    """Pull a contract address out of ANYTHING: bare CA or a dexscreener /
+    pump.fun / geckoterminal / photon link."""
+    t = text or ""
+    m = re.search(r"0x[a-fA-F0-9]{40}", t)
     if m:
         return m.group(0)
-    for tok in (text or "").split():
-        t = tok.strip().strip(".,)")
-        if SOL_CA.match(t) and not t.startswith("0x") and 32 <= len(t) <= 44:
-            return t
+    for cand in re.findall(r"[1-9A-HJ-NP-Za-km-z]{32,44}", t):
+        try:
+            import solders.pubkey as _pk
+
+            _pk.Pubkey.from_string(cand)
+            return cand
+        except Exception:
+            continue
+    for tok in t.split():
+        tok = tok.strip().strip(".,)")
+        if SOL_CA.match(tok) and not tok.startswith("0x") and 32 <= len(tok) <= 44:
+            return tok
     return None
 
 
